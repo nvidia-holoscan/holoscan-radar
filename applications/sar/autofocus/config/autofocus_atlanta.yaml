@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # WORKFLOWS Figure 2 on Hartsfield-Jackson Atlanta -- one of the
-# scene-axis configs for tools/sar_autofocus/sweep.py, which is the
+# scene-axis configs for operators/sar/autofocus_op/tools/sweep.py, which is the
 # only place PGA accuracy can be measured (CI fixtures are 5-pulse
 # generated CPHDs, far too small). The sweep's scene axis exists
 # because every accuracy number in OPEN_ITEMS.md through 2026-10-30

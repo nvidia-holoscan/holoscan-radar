@@ -5,7 +5,7 @@
 # vehicle, picked because it meets PGA's scene preconditions: a
 # stationary hard target, isolated 135x over its annulus, that stays
 # lit across the whole dwell (worst of 8 dwell blocks holds 0.68 of
-# its mean). Selected with tools/sar_autofocus/pga_screen.py, which
+# its mean). Selected with operators/sar/autofocus_op/tools/pga_screen.py, which
 # re-measures those two numbers on demand. Screening picked this
 # collect, but it does not make it the best of the four: Atlanta and
 # Houston both score higher on the same screen (see the app README).
@@ -16,7 +16,7 @@
 # network. Paths resolve under the build data directory (default:
 # data/).
 #
-#   python3 tools/sar_data/pull_cphd.py --app autofocus
+#   uv run applications/sar/tools/pull_cphd.py --app autofocus
 #
 # Dependency setup and the complete download-and-run quick-start:
 # applications/sar/autofocus/README.md

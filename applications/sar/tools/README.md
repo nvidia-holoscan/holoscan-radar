@@ -10,7 +10,7 @@ or download public collections.
 Run from the repository root **on the host**:
 
 ```bash
-uv run tools/sar_data/view_image.py path/to/image.npy
+uv run applications/sar/tools/view_image.py path/to/image.npy
 ```
 
 This writes `image.png` beside the saved array and prints its
@@ -22,9 +22,9 @@ are unchanged. Existing PNG output files are overwritten.
 For other files and options:
 
 ```bash
-uv run tools/sar_data/view_image.py image.npy --range-db 80 -o figures/image.png
-uv run tools/sar_data/view_image.py clean.npy corrected.npy --compare
-uv run tools/sar_data/view_image.py image.npy --show
+uv run applications/sar/tools/view_image.py image.npy --range-db 80 -o figures/image.png
+uv run applications/sar/tools/view_image.py clean.npy corrected.npy --compare
+uv run applications/sar/tools/view_image.py image.npy --show
 ```
 
 The default is grayscale log magnitude over 60 dB, with the brightest sample
@@ -50,7 +50,7 @@ path works across the CLI's host/container repository mount.
 Offline viewer checks (no GPU or external collections needed):
 
 ```bash
-uv run tools/sar_data/viewer_tests/test_view_image.py
+uv run applications/sar/tools/tests/viewer/test_view_image.py
 ```
 
 ## Data preparation setup
@@ -59,12 +59,13 @@ Use `uv run` for either preparation script; it installs the declared dependencie
 in an isolated tool environment without changing the repository's `.venv`:
 
 ```bash
-uv run tools/sar_data/pull_cphd.py --app autofocus --list
-uv run tools/sar_data/subset_cphd.py --help
+uv run applications/sar/tools/pull_cphd.py --app autofocus --list
+uv run applications/sar/tools/subset_cphd.py --help
 ```
 
-For direct `python3` invocation instead, install `tools/sar_data/requirements.txt`
-in your chosen Python environment. The commands below use `uv run`.
+The inline dependency declarations isolate preparation from the viewer.
+`requirements.txt` also supplies the preparation tests; do not install it as
+a runtime dependency of the applications.
 
 Prepare data on the host; both the host CLI and development container can
 then use the downloaded files. No Python dependency installation inside the
@@ -82,14 +83,14 @@ work even when the CLI runs the executable from its build directory.
 For example, download the Imperial Valley collect and run continuous strip:
 
 ```bash
-uv run tools/sar_data/pull_cphd.py --app continuous_strip \
+uv run applications/sar/tools/pull_cphd.py --app continuous_strip \
   --dest data/sar
 ./holoscan-radar run continuous_strip
 ```
 
 The pinned image and Holoscan CLI setup are in the
-[developer guide](../../DEVELOPER.md#holoscan-cli). Each
-[standalone app guide](../../applications/sar/README.md) has its own complete
+[developer guide](../../../DEVELOPER.md#holoscan-cli). Each
+[standalone app guide](../README.md) has its own complete
 download-and-run command block. If your CPHDs live elsewhere, use absolute
 paths in a custom YAML or configure `-DHOLOHUB_DATA_DIR=/path/to/data` inside
 the container, keeping the `sar/` layout beneath it. External host directories
@@ -101,8 +102,8 @@ directory or YAML directory take precedence over the data-directory fallback.
 The selected YAML determines the required inputs. From the host repository root:
 
 ```bash
-uv run tools/sar_data/pull_cphd.py --config applications/sar/autofocus/config/autofocus_imperial.yaml --list
-uv run tools/sar_data/pull_cphd.py --config applications/sar/autofocus/config/autofocus_imperial.yaml
+uv run applications/sar/tools/pull_cphd.py --config applications/sar/autofocus/config/autofocus_imperial.yaml --list
+uv run applications/sar/tools/pull_cphd.py --config applications/sar/autofocus/config/autofocus_imperial.yaml
 ```
 
 Use the same config you pass to the application. This handles every shipped SAR
@@ -129,7 +130,7 @@ six independent images); Atlanta and Houston require explicit selection.
 On the **host**, list a manifest without touching the network:
 
 ```bash
-uv run tools/sar_data/pull_cphd.py --app tiled_strip --list
+uv run applications/sar/tools/pull_cphd.py --app tiled_strip --list
 ```
 
 Choose the command for the preset you want to run. Destinations below are
@@ -138,24 +139,24 @@ The commands use isolated dependencies as described above.
 
 | Application / preset | Collection | Download / preparation command | Destination |
 | --- | --- | --- | --- |
-| Autofocus default | Kourou Umbra, 2023-06-24 | `uv run tools/sar_data/pull_cphd.py --app autofocus` | `data/sar/` |
-| Tiled strip | Imperial Valley Capella | `uv run tools/sar_data/pull_cphd.py --app tiled_strip` | `data/sar/` |
-| Continuous strip / autofocus Imperial | Same Imperial Valley Capella | `uv run tools/sar_data/pull_cphd.py --app continuous_strip` | `data/sar/` |
-| Independent images | Six Umbra collections | `uv run tools/sar_data/pull_cphd.py --app independent_images` | `data/sar/` |
-| Spotlight / autofocus Atlanta | Atlanta Umbra | `uv run tools/sar_data/pull_cphd.py --app spotlight` | `data/sar/` |
-| Video SAR / autofocus Houston | Houston FX subset | `uv run tools/sar_data/pull_cphd.py --app video_sar` | `data/sar/` |
+| Autofocus default | Kourou Umbra, 2023-06-24 | `uv run applications/sar/tools/pull_cphd.py --app autofocus` | `data/sar/` |
+| Tiled strip | Imperial Valley Capella | `uv run applications/sar/tools/pull_cphd.py --app tiled_strip` | `data/sar/` |
+| Continuous strip / autofocus Imperial | Same Imperial Valley Capella | `uv run applications/sar/tools/pull_cphd.py --app continuous_strip` | `data/sar/` |
+| Independent images | Six Umbra collections | `uv run applications/sar/tools/pull_cphd.py --app independent_images` | `data/sar/` |
+| Spotlight / autofocus Atlanta | Atlanta Umbra | `uv run applications/sar/tools/pull_cphd.py --app spotlight` | `data/sar/` |
+| Video SAR / autofocus Houston | Houston FX subset | `uv run applications/sar/tools/pull_cphd.py --app video_sar` | `data/sar/` |
 
 For the default autofocus workflow, download Kourou and launch:
 
 ```bash
-uv run tools/sar_data/pull_cphd.py --app autofocus --list
-uv run tools/sar_data/pull_cphd.py --app autofocus
+uv run applications/sar/tools/pull_cphd.py --app autofocus --list
+uv run applications/sar/tools/pull_cphd.py --app autofocus
 ./holoscan-radar run autofocus --language cpp
 ```
 
 This downloads about 4.19 GiB to
 `data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd`, matching the default
-[autofocus preset](../../applications/sar/autofocus/config/autofocus.yaml).
+[autofocus preset](../autofocus/config/autofocus.yaml).
 An explicit `--dest` overrides the application's destination, so a different
 location also requires a matching `cphd.path` in your YAML.
 
@@ -166,8 +167,8 @@ It does not download Atlanta or prepare the Houston subset; use the separate
 instructions in the table for those.
 
 ```bash
-uv run tools/sar_data/pull_cphd.py --app all --list
-uv run tools/sar_data/pull_cphd.py --app all --dest data/sar
+uv run applications/sar/tools/pull_cphd.py --app all --list
+uv run applications/sar/tools/pull_cphd.py --app all --dest data/sar
 ```
 
 All selected CPHD files go directly into `data/sar/`, without per-collection or
@@ -205,9 +206,9 @@ the full 110 GiB signal block:
 
 ```bash
 mkdir -p data/sar
-uv run tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
+uv run applications/sar/tools/subset_cphd.py applications/sar/tools/config/houston_1m.yaml \
   --dry-run -o data/sar
-uv run tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
+uv run applications/sar/tools/subset_cphd.py applications/sar/tools/config/houston_1m.yaml \
   -o data/sar
 ```
 
@@ -315,7 +316,7 @@ Remote sources are restricted to these HTTPS origins by default:
 A custom server requires explicit caller approval outside the recipe:
 
 ```bash
-uv run --with-requirements tools/sar_data/requirements.txt tools/sar_data/subset_cphd.py \
+uv run --with-requirements applications/sar/tools/requirements.txt applications/sar/tools/subset_cphd.py \
   --source https://datasets.example.org/scene.cphd \
   --allow-source-origin https://datasets.example.org -o data/sar/custom.cphd
 ```
@@ -359,7 +360,7 @@ available **on the host**. With the optional Python dependencies installed,
 run:
 
 ```bash
-uv run tools/sar_data/subset_cphd.py \
+uv run applications/sar/tools/subset_cphd.py \
   --source build/tests/cpp/generated_sar_smoke.cphd \
   --pulse-count 3 --sample-count 4 -o build/tests/cpp/subset_local.cphd
 ```
@@ -374,8 +375,8 @@ flow; it does not replace validation against the Houston collection.
 Run the offline CLI regressions from the repository root:
 
 ```bash
-uv run --no-project --with-requirements tools/sar_data/requirements.txt \
-  python -m unittest discover -s tools/sar_data -v
+uv run --no-project --with-requirements applications/sar/tools/requirements.txt \
+  python -m unittest discover -s applications/sar/tools/tests/data -v
 ```
 
 These checks cover the catalog/config resolver plus transient and permanent
@@ -383,3 +384,11 @@ HTTP failures, range/source validation, bounded worker connections, interrupted
 and process-terminated resume, corrupt/mismatched checkpoints, concurrent-writer
 exclusion, publication recovery, and exact subset samples/PVPs. They use small
 local files and a local HTTP server; no public collections are downloaded.
+
+## Qualification and recipe boundaries
+
+Generated analytic fixtures and public collections serve different purposes. Fixtures provide independent known target/trajectory/phase truth and work without downloads. Public data exercise real metadata, scene content and ephemeris, but an image that looks plausible does not validate focus, amplitude, geometry or seams. Historical real-collection survey evidence is tied to its source revision.
+
+Houston preparation preserves an FX frequency subband rather than treating CPHD samples as a time-domain decimation problem. The shipped `config/houston_1m.yaml` owns the selected subband and pulse range; preparation preserves PVP, provenance and sidecar information needed by the app. Use `--list` to inspect the manifest without fetching a public collection. Metadata pins check the original header/XML before parsing or publication; custom files remain usable without claiming a bundled pin. Keep integrity, retries, origin checks, checkpoints and progress reporting enabled.
+
+Whether portable demo grids should be explicitly declared per recipe or derived from collection geometry remains a product question. Image-derived simulator scenes also need a measured reflector cap and generation budget before becoming default data. No full-resolution real-data qualification or cross-platform bitwise fixture stability is claimed.

@@ -180,7 +180,7 @@ offline file, run `ctest --test-dir build -R '^Sar_.*_smoke$' --output-on-failur
 uses the C++ fixture generator. The CPHD reader C++ tests cover decoding,
 selection, boundaries, and malformed inputs. Real-collection validation is
 tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md); see
-[SAR data preparation](../../../tools/sar_data/README.md).
+[SAR data preparation](../../../applications/sar/tools/README.md).
 
 ## Ingestion hardening measurements
 

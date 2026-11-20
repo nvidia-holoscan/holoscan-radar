@@ -97,3 +97,19 @@ agreement, and per-tick (non-latching) `[live]` override behaviour. The
 estimate's transfer onto a differently formed product is tested with the
 application that owns the Figure 2 path. See the
 [SAR operator contract](../../../docs/planning/SAR/OPERATOR_API.md).
+
+## Checkout diagnostic tools
+
+These scripts are optional checkout tools, outside installed packages. Launch from the repository root with `uv run`; their inline declarations supply NumPy/PyYAML without changing application dependencies. They require built C++ examples and local CPHD data. Build `spotlight` for `pga_screen.py`, and `autofocus` for `sweep.py`, using the host CLI with `--language cpp`. Run the scripts in an SDK/CUDA environment where those binaries execute (for example the development container), with `uv` available. Use each script's executable-path override for the actual build tree (ordinary app builds use `build/<app>`, aggregate module builds use `build/holoscan-radar`).
+
+```bash
+uv run operators/sar/autofocus_op/tools/pga_screen.py --help
+uv run operators/sar/autofocus_op/tools/sweep.py --help
+uv run operators/sar/autofocus_op/tools/sweep.py --grid shapes \
+  --binary build/autofocus/applications/sar/autofocus/cpp/autofocus
+uv run operators/sar/autofocus_op/tools/sweep.py --grid symmetry --scenes all \
+  --binary build/autofocus/applications/sar/autofocus/cpp/autofocus
+uv run --no-project --with pyyaml python -m unittest discover -s operators/sar/autofocus_op/tools/tests -v
+```
+
+Screening measures isolation and persistence over disjoint dwell blocks; it cannot establish stationarity or guarantee PGA success. Sweeps run injected error profiles against the example app and require both a valid score and termination provenance. Failed, timed-out, nonfinite or incomplete campaigns fail rather than supplying accuracy results. Use `--base` for another app preset and inspect help for binary, pulse-count, window and scene options. `SAR_AF_IGNORE_DROP` exposes a refused estimate for diagnosis and may worsen the image; it is not a quality tuning knob.

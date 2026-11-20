@@ -30,7 +30,7 @@ For offline SAR fixture checks, run `./holoscan-radar test` on the host; it
 includes the registered SAR smokes. The shipped SAR YAML files are real-data
 presets and need local CPHD data before direct execution. See the
 [SAR application index](applications/sar/README.md) and
-[CPHD preparation guide](tools/sar_data/README.md). The fixture checks graph
+[CPHD preparation guide](applications/sar/tools/README.md). The fixture checks graph
 execution, not focus on public collections.
 
 ## Operator groups

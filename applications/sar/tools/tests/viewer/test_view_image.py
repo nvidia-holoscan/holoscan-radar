@@ -7,7 +7,7 @@
 # dependencies = ["numpy>=1.24", "matplotlib>=3.8"]
 # ///
 
-"""Offline viewer checks: uv run tools/sar_data/viewer_tests/test_view_image.py."""
+"""Offline viewer checks: uv run applications/sar/tools/tests/viewer/test_view_image.py."""
 
 import contextlib
 import io
@@ -19,7 +19,7 @@ from unittest import mock
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import view_image  # noqa: E402
 
 

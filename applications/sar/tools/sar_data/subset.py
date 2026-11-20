@@ -4,7 +4,7 @@
 """Subset a CPHD: pulse window and/or a contiguous sample (frequency) subband.
 
 The video-SAR demo cannot stream Houston's 110 GiB signal block, so this
-writes a local file the app can read. Two jobs, matching INPUT_DATA.md:
+writes a local file the app can read. Two jobs, matching applications/sar/tools/README.md:
 
 - a half-open pulse window (omit for the whole dwell)
 - a contiguous central sample slice, which for FX-domain CPHD is a frequency
@@ -641,7 +641,7 @@ def _apply_subset_xml(
     )
     scss0 = float(np.asarray(pvps["SCSS"], dtype=np.float64)[0])
     sc0_0 = float(np.asarray(pvps["SC0"], dtype=np.float64)[0])
-    # INPUT_DATA.md: centre and bandwidth from the actual kept grid.
+    # applications/sar/tools/README.md: centre and bandwidth from the actual kept grid.
     fx_c = sc0_0 + 0.5 * (num_samples - 1) * scss0
     fx_bw = num_samples * scss0
 

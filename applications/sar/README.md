@@ -89,7 +89,7 @@ of image quality on a real collection. For targeted SAR CTest commands inside
 a development container, see the individual app guides.
 
 The shipped YAML files are **real-data presets**. Download or subset the CPHD
-files in the host `data/sar/` directory using [optional data preparation tools](../../tools/sar_data/README.md),
+files in the host `data/sar/` directory using [optional data preparation tools](../../applications/sar/tools/README.md),
 then run through the Holoscan CLI or directly inside the DevContainer. Relative
 CPHD paths first use an existing caller-relative or YAML-relative file, then
 runtime `HOLOHUB_DATA_DIR`, then the data directory compiled into the application
@@ -146,13 +146,13 @@ With `dump: true`, the app writes complex `.npy` products independently of the
 GUI. Convert a saved image to a PNG on the host from the repository root:
 
 ```bash
-uv run tools/sar_data/view_image.py path/to/image.npy
+uv run applications/sar/tools/view_image.py path/to/image.npy
 ```
 
 The PNG is written beside the input; no display is needed. `uv` supplies the
 optional plotting dependencies. Add `--show` for interactive viewing or use
 `clean.npy corrected.npy --compare` for panels sharing one intensity scale.
-The [viewer guide](../../tools/sar_data/README.md#view-saved-images) describes
+The [viewer guide](../../applications/sar/tools/README.md#view-saved-images) describes
 range settings and array orientation. Save logs within the checkout print the
 viewer command for the actual image filename.
 

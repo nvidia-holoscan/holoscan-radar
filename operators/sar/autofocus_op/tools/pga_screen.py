@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy", "pyyaml"]
+# ///
 
 """Screen a CPHD collect for PGA suitability, persistence included.
 
@@ -43,7 +47,7 @@ rather than a transcribed ECEF grid, so a verdict here is expressed in
 the same terms the scene configs beside it already use: a cell on a
 square lattice of a given side and spacing.
 
-    python3 tools/sar_autofocus/pga_screen.py \\
+    uv run operators/sar/autofocus_op/tools/pga_screen.py \\
         data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd
 
 This is a diagnostic scene-selection heuristic, not an autofocus gate:
@@ -67,13 +71,14 @@ import numpy as np
 import yaml
 
 # The data root the SAR apps resolve `cphd.path` against.
-DATA_ROOT = pathlib.Path("data")
-SPOTLIGHT = pathlib.Path("build/applications/sar/spotlight/cpp/spotlight")
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+DATA_ROOT = REPO_ROOT / "data"
+SPOTLIGHT = REPO_ROOT / "build/applications/sar/spotlight/cpp/spotlight"
 
 # CPHD's ASCII header is terminated by a form feed, and its fields are
 # "KEY := VALUE" lines. Reading NumVectors needs only that header and the
 # XML block it points at, so this stays on the standard library rather
-# than taking the sarkit dependency tools/sar_data needs for rewriting.
+# than taking the sarkit dependency applications/sar/tools needs for rewriting.
 _SECTION_TERMINATOR = b"\f\n"
 _HEADER_PROBE = 8192
 

@@ -82,7 +82,7 @@ From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
-python3 tools/sar_data/pull_cphd.py --app tiled_strip \
+uv run applications/sar/tools/pull_cphd.py --app tiled_strip \
   --dest data/sar
 ./holoscan-radar run tiled_strip
 ```
@@ -111,7 +111,7 @@ an emit; indefinite hold and interactive X11 validation remain open.
 `dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
 and `output.max_files` to control its files.
 
-See [SAR data preparation](../../../tools/sar_data/README.md),
+See [SAR data preparation](../../../applications/sar/tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
 [current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).

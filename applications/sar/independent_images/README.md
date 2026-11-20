@@ -74,13 +74,13 @@ real collections.
 
 ## Real collection preset
 
-The preset rotates six distinct Umbra SNAPSHOT CPHDs under `data/sar/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/` directory. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
+The preset rotates six distinct Umbra SNAPSHOT CPHDs under `data/sar/`. Run `uv run applications/sar/tools/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/` directory. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
-python3 tools/sar_data/pull_cphd.py --app independent_images \
+uv run applications/sar/tools/pull_cphd.py --app independent_images \
   --dest data/sar
 ./holoscan-radar run independent_images
 ```
@@ -112,7 +112,7 @@ an emit; indefinite hold and interactive X11 validation remain open.
 `dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
 and `output.max_files` to control its files.
 
-See [SAR data preparation](../../../tools/sar_data/README.md),
+See [SAR data preparation](../../../applications/sar/tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
 [current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).

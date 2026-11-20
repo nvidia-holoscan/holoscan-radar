@@ -7,7 +7,7 @@
 # (no tile seams, no cross-range taper). Pull first (~3.45 GiB);
 # the app never reaches the network.
 #
-#   python3 tools/sar_data/pull_cphd.py --app continuous_strip \
+#   uv run applications/sar/tools/pull_cphd.py --app continuous_strip \
 #     --dest data/sar
 #   Paths below resolve under the build data directory (default: data/).
 #

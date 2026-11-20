@@ -9,7 +9,7 @@
 
 """Save a log-magnitude PNG from a SAR NumPy image; optionally compare or show.
 
-Run from the repository root: uv run tools/sar_data/view_image.py image.npy
+Run from the repository root: uv run applications/sar/tools/view_image.py image.npy
 Plotting dependencies are isolated by uv; applications do not import this tool.
 """
 

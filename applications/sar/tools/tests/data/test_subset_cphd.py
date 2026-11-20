@@ -14,6 +14,8 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from types import SimpleNamespace
 from unittest import mock
 
@@ -830,7 +832,7 @@ class SubsetFileTest(unittest.TestCase):
             values = make_cphd(source, None)
             command = [
                 sys.executable,
-                str(Path(__file__).with_name("subset_cphd.py")),
+                str(Path(subset_cli.__file__)),
                 "--source",
                 str(source),
                 "--samples",

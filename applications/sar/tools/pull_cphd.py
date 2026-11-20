@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Download the pinned public CPHDs for the standalone SAR applications (INPUT_DATA.md).
+"""Download the pinned public CPHDs for the standalone SAR applications (applications/sar/tools/README.md).
 
 The app reads only local files. This script pulls over HTTPS (or
 ``aws s3 --no-sign-request`` when available) and skips files already
@@ -14,10 +14,10 @@ file's CPHD XML, not the folder name.
 
 Tiled and continuous strip share the Imperial Valley Capella collection.
 
-uv run tools/sar_data/pull_cphd.py --config applications/sar/autofocus/config/autofocus.yaml
-uv run tools/sar_data/pull_cphd.py --app tiled_strip
-uv run tools/sar_data/pull_cphd.py --app independent_images
-uv run tools/sar_data/pull_cphd.py --app all --dest data/sar
+uv run applications/sar/tools/pull_cphd.py --config applications/sar/autofocus/config/autofocus.yaml
+uv run applications/sar/tools/pull_cphd.py --app tiled_strip
+uv run applications/sar/tools/pull_cphd.py --app independent_images
+uv run applications/sar/tools/pull_cphd.py --app all --dest data/sar
 """
 
 # /// script
@@ -99,9 +99,9 @@ INDEPENDENT_IMAGES: list[tuple[str, str]] = [
     ),
 ]
 
-# Re-verified 2026-08-30. INPUT_DATA.md open item 3.
+# Re-verified 2026-08-30. applications/sar/tools/README.md open item 3.
 # Tiled strip and continuous strip share Imperial Valley. Palmdale stays in
-# INPUT_DATA as an optional CPHD 1.0.1 spare, not this pin.
+# the data-tool guide as an optional CPHD 1.0.1 spare, not this pin.
 IMPERIAL_VALLEY: list[tuple[str, str]] = [
     (
         "Imperial Valley",
@@ -121,7 +121,7 @@ AUTOFOCUS_KOUROU: list[tuple[str, str]] = [
     ),
 ]
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 APPS = {
     name: REPO_ROOT / f"applications/sar/{name}/config/{name}.yaml"
     for name in (
@@ -172,7 +172,7 @@ def dataset_catalog() -> dict[Path, Dataset]:
             Path(f"sar/{atlanta}_CPHD.cphd"),
         )
     )
-    recipe = REPO_ROOT / "tools/sar_data/recipes/houston_1m.yaml"
+    recipe = REPO_ROOT / "applications/sar/tools/config/houston_1m.yaml"
     spec = yaml.safe_load(recipe.read_text())
     # The recipe owns Houston's source and window; never substitute the full raw object.
     datasets.append(
@@ -415,7 +415,7 @@ def prepare_one(
     if job.recipe is None:
         return pull_one(job, force, index, total)
     command = (["uv", "run"] if shutil.which("uv") else [sys.executable]) + [
-        str(REPO_ROOT / "tools/sar_data/subset_cphd.py"),
+        str(REPO_ROOT / "applications/sar/tools/subset_cphd.py"),
         str(job.recipe),
         "--output",
         str(job.destination),
@@ -720,7 +720,7 @@ def main() -> int:
                 f"error: {job.scene}: download failed: {exc}\n"
                 f"Source: {https_url(job.https_prefix, job.key)}\n"
                 f"Destination: {job.destination}\n"
-                "See tools/sar_data/README.md for download instructions.",
+                "See applications/sar/tools/README.md for download instructions.",
                 file=sys.stderr,
             )
             return 1

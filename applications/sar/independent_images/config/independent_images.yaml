@@ -4,7 +4,7 @@
 # Independent images demo: rotate six unique-IARP Umbra SNAPSHOT CPHDs (INPUT_DATA.md).
 # Pull first (~10.5 GiB); the app never reaches the network.
 #
-#   python3 tools/sar_data/pull_cphd.py --app independent_images \
+#   uv run applications/sar/tools/pull_cphd.py --app independent_images \
 #     --dest data/sar
 #   Paths below resolve under the build data directory (default: data/).
 #

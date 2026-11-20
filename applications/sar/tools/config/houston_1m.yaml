@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Full-dwell Houston central FX subband at ~1.0 m ground-range GSD.
-# count 16753 is 4096 * 4.09 / 1.0 on the INPUT_DATA.md 4.09 m pin.
+# count 16753 is 4096 * 4.09 / 1.0 on the original collection's 4.09 m resolution pin.
 # Pulses omitted = the whole dwell.
 #
 # Local file, not S3:
-#   python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
+#   uv run applications/sar/tools/subset_cphd.py applications/sar/tools/config/houston_1m.yaml \
 #     --source data/sar/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd \
 #     -o data/sar
 

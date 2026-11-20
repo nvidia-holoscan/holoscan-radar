@@ -7,6 +7,8 @@ dist/
 CMakeFiles/
 CMakeCache.txt
 data/
+# Keep relocated offline data-tool tests tracked.
+!applications/sar/tools/tests/data/
 .claude/
 .cursor/
 .vscode/

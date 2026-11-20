@@ -73,9 +73,9 @@ From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
-python3 -m pip install -r tools/sar_data/requirements.txt
+python3 -m pip install -r applications/sar/tools/requirements.txt
 mkdir -p data/sar
-python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
+uv run applications/sar/tools/subset_cphd.py applications/sar/tools/config/houston_1m.yaml \
   -o data/sar
 ./holoscan-radar run video_sar
 ```
@@ -111,7 +111,7 @@ an emit; indefinite hold and interactive X11 validation remain open.
 `dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
 and `output.max_files` to control its files.
 
-See [SAR data preparation](../../../tools/sar_data/README.md),
+See [SAR data preparation](../../../applications/sar/tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
 [current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).

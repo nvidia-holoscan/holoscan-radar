@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyyaml"]
+# ///
 
 """Sweep AutofocusOp accuracy against injected truth and tabulate the result.
 
@@ -8,17 +12,17 @@ Characterization, not a test: it runs the `autofocus` application over a grid
 of injected error profiles and operator settings on a real collect, scrapes
 `AutofocusScoreOp`'s affine-removed residual, and prints a table. CI cannot do
 this -- the fixtures are 5-pulse generated CPHDs, far too small for PGA -- so
-the numbers in `operators/sar/autofocus_op/OPEN_ITEMS.md` come from here and
+the numbers in `operators/sar/autofocus_op/README.md` come from here and
 this script is how they are reproduced or refuted.
 
 The grid axes are the ones that have been found to matter, in order: the error
 *shape* (a pure quadratic is the easiest case and flatters the estimator), the
 magnitude, the first window width, the aperture length, and the scene.
 
-  python3 tools/sar_autofocus/sweep.py --grid shapes
-  python3 tools/sar_autofocus/sweep.py --grid windows --pulses 8000
-  python3 tools/sar_autofocus/sweep.py --grid symmetry --scenes all
-  python3 tools/sar_autofocus/sweep.py --grid shapes --base config/other.yaml
+  uv run operators/sar/autofocus_op/tools/sweep.py --grid shapes
+  uv run operators/sar/autofocus_op/tools/sweep.py --grid windows --pulses 8000
+  uv run operators/sar/autofocus_op/tools/sweep.py --grid symmetry --scenes all
+  uv run operators/sar/autofocus_op/tools/sweep.py --grid shapes --base config/other.yaml
 
 The scene axis matters for a reason worth stating plainly: Kourou, which
 produced every accuracy number through 2026-10-30, was *screened* for PGA --
@@ -32,7 +36,7 @@ which has no dominant scatterer anywhere in it and is expected to fail; the
 negative control is what separates "this shape breaks the estimator" from
 "this scene does not meet the precondition".
 
-Residuals are read against the targets in `docs/planning/SAR/TESTING.md`: pi/8
+Residuals are read against the targets in `docs/TESTING.md`: pi/8
 (0.39 rad) to pass, pi/4 (0.785 rad) as the hard floor.
 """
 
@@ -61,7 +65,8 @@ REFUSED_RE = re.compile(r"autofocus REFUSED \((refused_\w+)\)")
 REFUSALS = {"refused_sharpness", "refused_scatterers", "refused_max_correction"}
 TERMINATIONS = REFUSALS | {"converged", "budget_exhausted", "stopped_scatterers"}
 
-CONFIG_DIR = pathlib.Path("applications/sar/autofocus/config")
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+CONFIG_DIR = REPO_ROOT / "applications/sar/autofocus/config"
 
 # One config per scene, ordered easiest-to-hardest for PGA's precondition. The
 # configs carry the reasoning for each choice of scene; what matters here is
@@ -358,7 +363,7 @@ def main() -> int:
     parser.add_argument(
         "--binary",
         type=pathlib.Path,
-        default=pathlib.Path("build/applications/sar/autofocus/cpp/autofocus"),
+        default=(REPO_ROOT / "build/applications/sar/autofocus/cpp/autofocus"),
     )
     parser.add_argument(
         "--pulses", type=int, default=None, help="aperture for grids that do not set one"

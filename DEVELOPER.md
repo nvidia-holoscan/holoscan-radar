@@ -48,7 +48,7 @@ holoscan-radar/
 │       ├── adaptive_aoa/
 │       ├── multi_waveform/
 │       └── mimo_ddm/
-├── tools/sar_data/               # Optional CPHD download/subset CLIs
+├── applications/sar/tools/               # Optional CPHD download/subset CLIs
 ├── python/holoscan_radar/
 │   ├── _radar.cpp                  # HSDK 5 FMCW operator provider
 │   └── applications/              # Shared Python Graph helpers
@@ -275,7 +275,7 @@ ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure
 For individual SAR build gates use `-DBUILD_ALL=OFF -DAPP_spotlight=ON`
 (or `APP_video_sar`, `APP_tiled_strip`, `APP_continuous_strip`,
 `APP_independent_images`). See the [SAR app index](applications/sar/README.md)
-for mode-specific graphs, [data preparation](tools/sar_data/README.md) for
+for mode-specific graphs, [data preparation](applications/sar/tools/README.md) for
 optional public collections, and the [HSDK 5 SAR contract](docs/planning/SAR/OPERATOR_API.md).
 The fixture is generated in C++; C++ applications do not require the Python
 provider. The five formation GUI apps have been visually checked with their

@@ -577,7 +577,7 @@ if(TARGET autofocus)
     endforeach()
     add_test(NAME AutofocusSweepReports
         COMMAND ${Python3_EXECUTABLE} -m unittest discover
-            -s ${PROJECT_SOURCE_DIR}/tools/sar_autofocus)
+            -s ${PROJECT_SOURCE_DIR}/operators/sar/autofocus_op/tools/tests)
     set_tests_properties(AutofocusSweepReports PROPERTIES LABELS "python;unit")
 
     # The same graph with a known look-axis error injected. The 5-pulse fixture

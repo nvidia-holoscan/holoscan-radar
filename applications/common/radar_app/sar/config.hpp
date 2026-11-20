@@ -951,7 +951,7 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
       // Strip container checkout prefixes so the command works from the host repository root.
       auto config_hint = std::filesystem::absolute(path).lexically_normal();
       for (auto ancestor = config_hint.parent_path(); !ancestor.empty();) {
-        if (std::filesystem::is_regular_file(ancestor / "tools/sar_data/pull_cphd.py")) {
+        if (std::filesystem::is_regular_file(ancestor / "applications/sar/tools/pull_cphd.py")) {
           config_hint = config_hint.lexically_relative(ancestor);
           break;
         }
@@ -969,14 +969,14 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
           cphd_override.empty()
               ? "Next step: prepare the data\n"
                 "Run on the host, from the repository root:\n\n"
-                "  uv run tools/sar_data/pull_cphd.py --config " +
+                "  uv run applications/sar/tools/pull_cphd.py --config " +
                     quoted_config + "\n\nAdd --list to preview without downloading.\n"
               : "Next step: check the input override\n"
                 "Confirm the override names an existing local CPHD file.\n";
       throw std::runtime_error("CPHD input file not found:\n  " + cphd.string() + "\n\n" +
                                download_hint +
                                "\nMore information"
-                               "\n  tools/sar_data/README.md"
+                               "\n  applications/sar/tools/README.md"
                                "\n  applications/sar/README.md"
                                "\n\nUsing existing data? Set cphd.path to your local CPHD file.");
     }

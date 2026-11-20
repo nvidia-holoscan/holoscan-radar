@@ -12,8 +12,8 @@
 #
 # Subset once (~27 GiB). The app never reaches the network.
 #
-#   python3 tools/sar_data/subset_cphd.py \
-#     tools/sar_data/recipes/houston_1m.yaml -o data/sar
+#   uv run applications/sar/tools/subset_cphd.py \
+#     applications/sar/tools/config/houston_1m.yaml -o data/sar
 #   Paths below resolve under the build data directory (default: data/).
 #
 # Scene is counts × spacing (6.8 km IARP-centred ENU). Aperture

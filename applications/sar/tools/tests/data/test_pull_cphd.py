@@ -1,14 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Offline downloader checks: python3 -m unittest discover -s tools/sar_data."""
+"""Offline downloader checks: python -m unittest discover -s applications/sar/tools/tests/data."""
 
 import contextlib
 import io
+import sys
 import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from unittest import mock
 
 import pull_cphd
@@ -75,7 +78,11 @@ class DownloadCliTest(unittest.TestCase):
             self.assertFalse(destination.exists())
 
     def test_every_shipped_config_has_an_exact_offline_plan(self):
-        configs = sorted((pull_cphd.REPO_ROOT / "applications/sar").glob("*/config/*.yaml"))
+        configs = sorted(
+            p
+            for p in (pull_cphd.REPO_ROOT / "applications/sar").glob("*/config/*.yaml")
+            if p.parent.parent.name != "tools"
+        )
         self.assertEqual(len(configs), 12)
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "data"
@@ -275,7 +282,7 @@ class DownloadCliTest(unittest.TestCase):
         run.assert_called_once_with(
             [
                 pull_cphd.sys.executable,
-                str(pull_cphd.REPO_ROOT / "tools/sar_data/subset_cphd.py"),
+                str(pull_cphd.REPO_ROOT / "applications/sar/tools/subset_cphd.py"),
                 str(job.recipe),
                 "--output",
                 str(job.destination),
