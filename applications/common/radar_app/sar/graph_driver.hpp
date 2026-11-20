@@ -88,7 +88,7 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
     throw std::invalid_argument("SAR: invalid CPHD pulse/sample extents");
   radar::MaxTensorExtents extents;
   extents.max_samples_per_pulse = max_samples;
-  // Reform sends no pulses between boundaries (OPERATOR_API.md step 5a), so
+  // Reform sends no pulses between boundaries (the operator README step 5a), so
   // the manager's largest output is the replay alone -- never a tick's
   // admissions plus the evictions they displace, which is what the sum below
   // bounds. The reader's batch still has to fit, since ingest arrives on the
@@ -769,7 +769,7 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
 // float32, where one ulp at a 6.4e6 m radius is 0.76 m, some 25 wavelengths at
 // X band, so only the sample side moves. `sample_precision: double` opts back
 // in for a collect that genuinely carries more. See the precision section of
-// SAR/OPERATOR_API.md.
+// the SAR operator READMEs.
 inline bool single_sample_precision(const std::filesystem::path& config) {
   const auto document = app::config::load_inherited_document(config);
   if (!document.find("/sample_precision")) {

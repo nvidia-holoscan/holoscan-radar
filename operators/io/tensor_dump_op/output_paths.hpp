@@ -20,7 +20,7 @@ inline std::filesystem::path checkout_relative_path(const std::string& path) {
   const auto absolute = std::filesystem::absolute(path, ec).lexically_normal();
   if (ec)
     return {};
-  constexpr const char* viewer = "tools/sar_data/view_image.py";
+  constexpr const char* viewer = "applications/sar/tools/view_image.py";
   for (;;) {
     if (std::filesystem::is_regular_file(root / viewer, ec))
       break;
@@ -55,7 +55,7 @@ inline std::string image_view_command(const std::string& path) {
   const auto relative = checkout_relative_path(path);
   if (relative.empty())
     return {};
-  return std::string("uv run tools/sar_data/view_image.py ") + quote_path(relative);
+  return std::string("uv run applications/sar/tools/view_image.py ") + quote_path(relative);
 }
 
 }  // namespace holoscan::radar::dump_paths

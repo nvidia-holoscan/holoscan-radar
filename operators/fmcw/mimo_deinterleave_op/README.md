@@ -7,7 +7,7 @@ TDM front-of-chain marshaling: gather an interleaved slow-time ADC cube into an 
 ## Responsibilities
 
 - Validates a uniform TDM transmit schedule and gathers packed chirps into explicit transmitter, receiver, chirp, and sample axes.
-- Owns schedule-index caching, output sizing, and tick-local schedule overrides.
+- Owns schedule-index caching and output sizing for the static transmit schedule.
 - Does not compensate inter-transmitter phase, process DDM codes, or support staggered/non-uniform timing.
 
 ## When to use
@@ -17,6 +17,8 @@ Use at the front of a uniform TDM-MIMO chain to convert the packed slow-time chi
 ```text
 adc_cube → MIMODeinterleaveOp → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → TDMDenseCompensationOp → VirtualArrayAssemblyOp
 ```
+
+Declarations and parameter defaults: [mimo_deinterleave_op.hpp](mimo_deinterleave_op.hpp). Behavioral requirements are documented below.
 
 ## Ports
 
@@ -38,16 +40,13 @@ adc_cube → MIMODeinterleaveOp → FMCWRangeProcessorOp → [ClutterFilterOp] �
 | --- | --- | --- | --- | --- |
 | `tx_schedule` | `TXSchedule` | none (required) | static (Params-only) | TDM firing pattern. Carries `num_tx`; optional `tx_order` (length M, default round-robin) or `chirp_tx_index` (length `M·L`, overrides `tx_order`). `L` is inferred as `(M·L)/num_tx`, not a separate parameter Cost: Changing it (not a `[live]` port) rebuilds the gather map: host expand + async H2D into the ctor-sized table. Same `(slow_time, schedule)` is a cache hit. |
 
-Contract: [`OPERATOR_API.md` § `MIMODeinterleaveOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md)
-
 ## Algorithm
 
 The operator is data marshaling only. `compute()` is a thin Holoscan shell; tick helpers stay in the `.cu` anonymous namespace. It receives the cube, classifies dtype (complex or real IF), and binds the static `tx_schedule` to this input (`build_deinterleave_stage_plan` → `DeinterleaveStagePlan` with layout, `num_tx`, `chirps_per_tx`, and `out_shape`). There is no `resolve_params`: no `[live]` ports, and the empty-schedule sentinel is rejected in the plan builder rather than mapped to an optional. Required `adc_cube_out` is the only published tensor (`emit_device_tensor`). There is no latched optional axis.
 
 Trailing rank is `(N_rx, M·L, samples)`, not an FMCW `(chirps, bins)` cube, so the plan builder uses `parse_adc_cube_layout` instead of `collapse_named_tx_rx_batch`. Rank must be exactly 3.
 
-**Schedule expansion.** `TXSchedule` describes how the interleaved `M·L` slow-time axis splits. `num_tx` is M. Empty `tx_order` means round-robin `[0, 1, …, M−1]`; a nonempty `tx_order` is a permutation of that set and is the firing cycle. Optional `chirp_tx_index` (length `M·L`) overrides `tx_order` when present. The cycle repeats `L` times. Expansion lives in `TXSchedule::expand_chirp_tx_index` (`operators/common/radar_common/descriptors/tx_schedule.cpp`). Pass the same `TXSchedule` to `TDMDenseCompensationOp / DDMDenseDemultiplexOp` so TDM phase uses firing slot, not TX id (`firing_slot_by_tx()`).
+**Schedule expansion.** `TXSchedule` describes how the interleaved `M·L` slow-time axis splits. `num_tx` is M. Empty `tx_order` means round-robin `[0, 1, …, M−1]`; a nonempty `tx_order` is a permutation of that set and is the firing cycle. Optional `chirp_tx_index` (length `M·L`) overrides `tx_order` when present. The cycle repeats `L` times. Expansion lives in `TXSchedule::expand_chirp_tx_index` (`operators/common/radar_common/descriptors/tx_schedule.cpp`). Pass the same `TXSchedule` to `TDMDenseCompensationOp / TDMSparseCompensationOp` so TDM phase uses firing slot, not TX id (`firing_slot_by_tx()`).
 
 **Uniformity (v1 scope).** First-wave TDM assumes uniform per-TX spacing. After expansion, the pattern must be a length-M cycle that repeats identically across all `L` repetitions, and each TX must appear exactly `chirps_per_tx = slow_time / num_tx` times. Custom permutations of `[0, …, M−1]` are allowed when they still repeat uniformly. Non-uniform / staggered schedules are rejected with `"TXSchedule: non-uniform / non-repeating schedule is rejected for first-wave TDM"` (or `"TXSchedule: each TX must appear exactly chirps_per_tx times"`). Staggered TDM is not supported.
 
@@ -61,9 +60,9 @@ So output slot `(tx, l)` gathers from interleaved slow-time index `k`. Built on 
 
 **Row copy.** One CUDA block per output row `(tx, rx, l)` cooperatively copies the contiguous `samples` vector. Input layout is `(N_rx, slow_time, samples)`; output layout is `(M_tx, N_rx, L, samples)` with channel-major `(tx, rx)` ordering. The innermost `samples` axis is copied 1:1. Element size selects a 4-, 8-, or 16-byte word copy (`uint32_t` / `uint64_t` / `uint4`) so complex64, complex128, float32, and float64 all take the same path.
 
-**PRI is not applied here.** This operator does not read `FMCWWaveformDescriptor`. The caller must set `waveform.chirp_repetition_interval` on downstream operators to the **per-TX effective PRI** (`M ×` the physical inter-chirp spacing). See `TXSchedule` notes in `OPERATOR_API.md` and `applications/fmcw/mimo_tdm` for the simulator split between physical vs effective PRI.
+**PRI is not applied here.** This operator does not read `FMCWWaveformDescriptor`. The caller must set `waveform.chirp_repetition_interval` on downstream operators to the **per-TX effective PRI** (`M ×` the physical inter-chirp spacing). See the [MIMO TDM application](../../../applications/fmcw/mimo_tdm/README.md) for the simulator split between physical vs effective PRI.
 
-TDM only. There is no DDM path — DDM has no slow-time interleave (`WORKFLOWS.md`).
+TDM only. There is no DDM path — DDM has no slow-time interleave (see the [workflow guide](../../../docs/WORKFLOWS.md)).
 
 ## Shape and dtype rules
 
@@ -101,16 +100,6 @@ Output extents are inferred each tick from `adc_cube` and `tx_schedule.num_tx`:
 
 **Cold.** First tick (or a new `(slow_time, TXSchedule)` pair): host `expand_chirp_tx_index` / `build_gather_map`, async H2D of the gather indices into the ctor-sized table, then the row-copy kernel. **Steady.** Same schedule and slow-time: kernel only, gather map reused. No FFT plans, no window coefficients. Per tick the operator loans one output tensor from the Graph pool.
 
-There are no `[live]` overrides. Size-ladder axes in `performance/operators/fmcw/mimo_deinterleave/adapter.cpp`: `(M_tx, N_rx, L, samples)` at rungs `xs` (2, 4, 8, 64), `sm` (4, 8, 16, 128), `md` (4, 16, 32, 256), `lg` (8, 32, 64, 512), `xl` (8, 64, 128, 1024), variant `rr` (round-robin). No leading-batch rung (opaque batch is out of scope). No measured numbers are recorded in-tree; run the harness:
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_mimo_deinterleave_smoke
-```
-
 ## Usage
 
 ```yaml
@@ -129,4 +118,4 @@ graph.add_flow(source->adc_cube, deinterleave->adc_cube, q);
 graph.add_flow(deinterleave->adc_cube_out, range->adc_cube, q);
 ```
 
-`extents` must fill `max_tx`, `max_rx`, `max_chirps` (per-TX `L`), and `max_samples_per_chirp`. Device Tensor producers also need `CompileOptions.deployment.bind_tensor_output_device` on `"adc_cube_out"`. Set downstream `waveform.chirp_repetition_interval` to the per-TX effective PRI (`M ×` physical spacing). Copy the same `tx_schedule` onto `TDMDenseCompensationOp / DDMDenseDemultiplexOp` under TDM.
+`extents` must fill `max_tx`, `max_rx`, `max_chirps` (per-TX `L`), and `max_samples_per_chirp`. Device Tensor producers also need `CompileOptions.deployment.bind_tensor_output_device` on `"adc_cube_out"`. Set downstream `waveform.chirp_repetition_interval` to the per-TX effective PRI (`M ×` physical spacing). Copy the same `tx_schedule` onto `TDMDenseCompensationOp / TDMSparseCompensationOp` under TDM.

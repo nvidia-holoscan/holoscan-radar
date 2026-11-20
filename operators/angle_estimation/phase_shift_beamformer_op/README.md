@@ -19,6 +19,8 @@ rd_maps → PhaseShiftBeamformerOp → rda_cube → CFARDetectorOp.rd_maps
                               └──→ az_grid / el_grid → FeatureAssemblyOp
 ```
 
+Declarations and parameter defaults: [phase_shift_beamformer_op.hpp](phase_shift_beamformer_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -44,17 +46,22 @@ rd_maps → PhaseShiftBeamformerOp → rda_cube → CFARDetectorOp.rd_maps
 | --- | --- | --- | --- | --- |
 | `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `array_geometry` | `ArrayGeometry` | none (required; empty fails `validate`) | `[live]` Exact wire-schema override | Virtual/physical element positions + wavelength. `num_elements` must match `rd_maps` channels. Cost: Rebuilds cached steering weights. |
-| `angle_convention` | `AngleConvention` | `radar_boresight` | static | How `az_coordinates` / `el_coordinates` and the output beam axes map to unit vectors, or `direction_cosine` for `(u, v)`. Cost: Rebuilds weights (part of the cache key). |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static | How `az_coordinates` / `el_coordinates` and the output beam axes map to unit vectors, or `direction_cosine` for `(u, v)`. Cost: Rebuilds weights. |
 | `az_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine`. Cost: Rebuilds weights. |
 | `el_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`. Cost: Rebuilds weights. |
 | `array_taper` | `WindowSpec` | `WindowType::kNone` (rectangular) | `[live]` Exact wire-schema override | Amplitude taper across elements. Cost: Rebuilds weights. |
 
-Contract: [`OPERATOR_API.md` § `PhaseShiftBeamformerOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md)
-
 ## Algorithm
 
-The shell (`phase_shift_beamformer_op.cu`) receives and validates the rank-3 cube, resolves the four live values into a tick-local `PhaseShiftBeamformerStageConfig`, and builds a `PhaseShiftBeamformerStagePlan` with captured-extent checks and output geometry. It then obtains the runtime stream and fetches conjugated steering weights plus device-resident effective grids from one `ConfigCache`. The required cube is prepared first; active grid sidebands are published before the cube so downstream Exact joins see the axes for that activation. Weights are built on device (`build_steering_weights_device`) as `(num_beams, num_channels)` with `BeamOrder::kAzMajor` (`beam = ia * num_el + ie`), `SteeringLayout::kBeamMajor`, `conjugate = true`. The stage is one broadcast complex GEMM (`phase_shift_beamformer_stage.hpp`):
+The shell (`phase_shift_beamformer_op.cu`) receives and validates the rank-3 cube, resolves the four
+live values into a tick-local `PhaseShiftBeamformerStageConfig`, and builds a
+`PhaseShiftBeamformerStagePlan` with captured-extent checks and output geometry. It then obtains the
+runtime stream and fetches conjugated steering weights plus device-resident effective grids from one
+`ConfigCache`. The required cube is prepared first; active grid sidebands are published before the
+cube so downstream Exact joins see the axes for that activation. Weights are built on device
+(`build_steering_weights_device`) as `(num_beams, num_channels)` with `BeamOrder::kAzMajor` (`beam =
+ia * num_el + ie`), `SteeringLayout::kBeamMajor`, `conjugate = true`. The stage is one broadcast
+complex GEMM (`phase_shift_beamformer_stage.hpp`):
 
 ```text
 Y[b, beam, n] = Σ_c Wᶜ[beam, c] · X[b, c, n]
@@ -117,16 +124,6 @@ A bytewise last-configuration comparison avoids formatting the complete cache ke
 On the campaign Thor deployment, three fresh paired runs of the existing small case (4 channels, a 17×1 scan grid, and a 16×32 RD plane) measured original/candidate medians of 0.055186/0.045389 ms in float and 0.149500/0.139977 ms in double. Median paired reductions were 9.996 µs (18.11%) and 9.755 µs (6.52%); all three fresh pairs cleared the declared 3 µs useful-gain floor. Each run used five warmups and 50 steady frames. All selected steady risk pairs passed; native tests and exact three-port comparisons passed in both precisions.
 
 These results concern repeated equal configurations. The separate cached-geometry override event was slower in both phases: fresh float 0.098167→0.114296 ms (+16.129 µs) and double 0.194870→0.207834 ms (+12.964 µs); screen costs were +18.574/+8.461 µs. Fresh cold timings also increased by 0.684 ms for small double, 0.738 ms for medium float and 0.395 ms for large float. These are measured reconfiguration/startup costs, with no frequent-reconfiguration, first-frame, tail or hardware-cause guarantee.
-
-Harness: `performance/operators/angle_estimation/phase_shift_beamformer/adapter.cpp`. Existing small/medium/large profiles vary channels, scan-grid dimensions and RD extent. Live scenarios cover geometry, both coordinate axes and taper. Sidebands precede the triggering `rd_maps`; reports keep the override-event bucket separate from steady timing. No reference results are checked in; run:
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_phase_shift_beamformer_smoke
-```
 
 ## Usage
 

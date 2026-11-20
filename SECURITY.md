@@ -45,7 +45,7 @@ Basis: externally distributed Apache-2.0 Holoscan module with customer/partner-f
 - **Application configuration:** Demo apps load YAML via Holoscan `config_io` / `yaml.safe_load` and decode operator parameters with Holoscan `params::decode` (e.g., under `applications/fmcw_*/`); operator parameter blocks and graph shape can change based on those files.
 - **Visualization and reporting:** Optional Holoviz paths (`HolovizOp`, `radar_app` viz helpers) and report operators (e.g., `DetectionReportOp`, `ClusterReportOp`) render or log detection/cluster metadata locally.
 - **Build and packaging:** CMake against Holoscan SDK / CUDA / MatX; optional container based on a published Holoscan NGC image; wheel builds via scikit-build-core.
-- **Auxiliary tooling:** Performance harnesses under `performance/` and CI helper scripts under `.github/workflows/scripts/`.
+- **Auxiliary tooling:** Checkout data/diagnostic tools beside their owners and CI helper scripts under `.github/workflows/scripts/`.
 
 This repository does **not** implement network listeners, authentication, or remote APIs. Any network or multi-node exposure comes from the surrounding Holoscan application and platform, not from operators in this module alone.
 
@@ -61,7 +61,7 @@ The following scenarios reflect the main security concerns for this codebase, in
 
 4. **Disclosure of operational radar outputs via reports and visualization:** When connected to real sensors, report operators and Holoviz overlays can expose detections, ranges, velocities, and angles on local displays or in logs. Misconfigured logging or shared displays in multi-user environments can leak operationally sensitive situational data.
 
-5. **Supply chain and build-time trust:** Builds depend on Holoscan SDK, CUDA Toolkit, MatX (via the SDK), yaml-cpp (performance harness), container base images, and optional pip installs (e.g., developer CLI tools in the Dockerfile). Compromised mirrors, tampered packages, or unpinned tooling increase exposure if builds are not verified and run in trusted environments.
+5. **Supply chain and build-time trust:** Builds depend on Holoscan SDK, CUDA Toolkit, MatX (via the SDK), container base images, and optional pip installs (e.g., developer CLI tools in the Dockerfile). Compromised mirrors, tampered packages, or unpinned tooling increase exposure if builds are not verified and run in trusted environments.
 
 6. **Auxiliary scripts invoking shells:** CI helpers (e.g., subprocess usage under `.github/workflows/scripts/`) can amplify risk if run on untrusted inputs or in shared CI contexts without the intended trusted-operator assumptions.
 

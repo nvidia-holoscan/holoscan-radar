@@ -18,6 +18,8 @@ Use after Doppler processing when a dense MIMO-DDM pipeline needs every TX-separ
 FMCWDopplerProcessorOp -> DDMDenseDemultiplexOp -> [DopplerNotchOp] -> VirtualArrayAssemblyOp
 ```
 
+Declarations and parameter defaults: [ddm_dense_demultiplex_op.hpp](ddm_dense_demultiplex_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -40,8 +42,6 @@ FMCWDopplerProcessorOp -> DDMDenseDemultiplexOp -> [DopplerNotchOp] -> VirtualAr
 | --- | --- | --- | --- | --- |
 | `cache_budget_bytes` | unsigned bytes | 134217728 (128 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `ddm_code` | `DDMCodeDescriptor` | none (required) | static | Defines TX count and exactly one linear-offset or nonlinear phase-code layout. |
-
-Contract: [`OPERATOR_API.md` section `DDMDenseDemultiplexOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 

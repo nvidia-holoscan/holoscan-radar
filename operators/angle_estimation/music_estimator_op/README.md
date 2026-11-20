@@ -19,6 +19,8 @@ Use after `SnapshotGatherOp` when closely spaced sources must be resolved and a 
   → SnapshotGatherOp → snapshot → MUSICEstimatorOp → aoa_estimates
 ```
 
+Declarations and parameter defaults: [music_estimator_op.hpp](music_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -58,9 +60,6 @@ Use after `SnapshotGatherOp` when closely spaced sources must be resolved and a 
 | `max_sources` | int64 | `4` | `[live]` Exact | `doa_multi` / EFT `K_max`; MUSIC targets `min(d_i, max_sources)` peaks Cost: Reallocates `doa_multi`; implementation cap `64`. |
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis sub-array **counts** `[P]` / `[P_az, P_el]` on a filled ULA/URA Cost: Rebuilds plan + index H2D; warns once. |
 | `forward_backward` | bool | `true` | static | Conjugate-reversed looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
-
-Contract: [`OPERATOR_API.md` § `MUSICEstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
 
 ## Algorithm
 
@@ -167,19 +166,7 @@ A paired Thor measurement of the existing `baseline-large` recipe (256 items, 16
 
 Startup and tails are separate tradeoffs: cached-smoothing float cold time increased 1.057 ms in the fresh check, while its steady time improved 23.92%. Cached-smoothing double p99 increased 0.116 ms; small float and large double p99 increased 0.016 and 0.022 ms. Other cold/setup diagnostics were mixed. Fifty-frame p99 is descriptive; this is a steady-state improvement without a startup, tail, arbitrary-shape or multi-GPU guarantee.
 
-**`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The Graph harness isolates all seven live inputs. The reduce kernel stages `P_n` in shared memory only when it fits a 40 KiB budget **and** the item grid covers at least one occupancy wave; otherwise it reads `P_n` from global memory.
-
-Harness (Graph, isolated production-Exact timing for every live input):
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_music_estimator_smoke
-```
-
-Size ladder axes: channels, detections (`num_items`), snapshots, and `num_az × num_el` (`xs`…`xl`; default smoke is `xs`/`sm`/`md`). Each size runs `array_geometry`, both scan grids, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources` scenarios plus a separate fixed model-order sweep at 1, 2, and `min(4, num_channels − 1)`. The Pfa scenario uses automatic source count; other live-override steady paths fix one source. Run the harness on the target GPU for current measurements.
+**`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The reduce kernel stages `P_n` in shared memory only when it fits a 40 KiB budget **and** the item grid covers at least one occupancy wave; otherwise it reads `P_n` from global memory.
 
 ## Usage
 

@@ -4,7 +4,7 @@
 // Copied from NVRadar backprojection CUDA kernels
 // (modules/edge/python/nvradar/edge/operators/backprojection_image_formation/bp_kernels.py)
 // at SHA 37c1cb29355bcfe256ae728f51dd47071847d949. OSRB relicensing of the
-// copies is recorded in this operator's OPEN_ITEMS.md. Taylor refined /
+// copies is recorded in this operator's README.md. Taylor refined /
 // expanded family plus the fp64-trajectory HQ block. Do not copy
 // backprojection_kernel (legacy float bin/w).
 

@@ -132,8 +132,7 @@ expected<TensorOutputLoan, Error> prepare_device_tensor(Output<Tensor>& port,
 // it: for a data-triggered operator HSDK 5 sets activation time to the
 // triggering sample's capture_time. Aligned fusion operators are the exception
 // (activation time is the newest aligned head) — see
-// docs/planning/OPERATOR_DEVELOPMENT.md, "Sample time propagation and aligned
-// joins".
+// docs/ARCHITECTURE.md, "Temporal coherence and publication order".
 //
 // [[nodiscard]] mirrors Output::emit, which carries it: a dropped result is a
 // silently lost output. HOLOSCAN_TRY is right for a required output, where a
@@ -142,7 +141,7 @@ expected<TensorOutputLoan, Error> prepare_device_tensor(Output<Tensor>& port,
 // An *optional* output — one the application may leave unwired — must never
 // use HOLOSCAN_TRY: publishing to an output with no consumer fails, and
 // propagating that would fail the whole activation and drop the tick's other
-// outputs as collateral. Per OPERATOR_API.md, "Optional output convention",
+// outputs as collateral. Per the operator README, "Optional output convention",
 // such a port takes one of two dispositions: `always` discards the result here
 // with an explicit (void), and `latched` goes through LatchedOutput below.
 [[nodiscard]] inline expected<void, Error> emit_prepared_tensor(Output<Tensor>& port,
@@ -162,7 +161,7 @@ template <typename Payload>
                           EmitOptions{.capture_time = context.activation_time()});
 }
 
-// A `latched` optional output (OPERATOR_API.md, "Optional output
+// A `latched` optional output (the operator README, "Optional output
 // convention"). An application may leave an optional output unwired, but
 // nothing exposes an output's wiring to the operator, so it cannot ask —
 // it learns only by emitting and failing. This records that answer once and

@@ -722,7 +722,7 @@ void MUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
   spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(is_valid).optional().queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(aoa_estimates).produces_tensor(pooled_tensor_output(kDevice, 2U, aoa_max_byte_span_));
-  // Optional in OPERATOR_API.md — always emitted so unwired consumers do
+  // Optional in the operator README — always emitted so unwired consumers do
   // not need Connectivity gating; tests bind/wire all five.
   spec.output(angle_spectrum)
       .produces_tensor(pooled_tensor_output(kDevice, 3U, spectrum_max_byte_span_));

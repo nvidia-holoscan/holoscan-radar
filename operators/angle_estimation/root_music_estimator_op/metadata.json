@@ -9,7 +9,7 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.5.0",
+        "version": "1.0.0",
         "changelog": {
             "0.5.0": "Allow distinct 2-D sources to share one aperture-axis coordinate during URA pairing",
             "0.4.0": "Cleanup: exact optional mask, reusable smoothing and bounded URA workspace, captured bounds, all-live timing, and model-order sweep",

@@ -7,6 +7,8 @@ dist/
 CMakeFiles/
 CMakeCache.txt
 data/
+# Keep relocated offline data-tool tests tracked.
+!applications/sar/tools/tests/data/
 .claude/
 .cursor/
 .vscode/
@@ -24,7 +26,4 @@ core
 # Agent and tool spin-off worktrees and session artifacts
 .worktrees/
 
-# Generated performance-run dumps (measurement output, not source)
-perf_results/
-perf_reports_full/
 Testing/

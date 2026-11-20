@@ -689,7 +689,7 @@ TEST(MVDREstimatorOpTest, FloatNineChannelUraRecoversDoaAndSpectrumPeak) {
 // Several frames rather than one: a latched port still takes a pool loan on
 // the tick it discovers it is unwired, so a slot the runtime failed to recycle
 // would starve the operator a few frames in rather than immediately.
-// See OPERATOR_API.md, "Optional output convention".
+// See the operator README, "Optional output convention".
 TEST(MVDREstimatorOpTest, UnwiredOptionalOutputsDoNotFailTheRun) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;

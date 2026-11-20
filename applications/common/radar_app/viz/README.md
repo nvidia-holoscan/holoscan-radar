@@ -398,9 +398,9 @@ at 10 Hz by default. Status text updates only with its associated SAR image.
 
 While forming, the independent progress panel shows the forming image's title
 under a stable checkpoint: `Receiving pulses`, `Forming image`, or `Image ready`.
-Accepted/declined autofocus outcomes remain visible; a pending autofocus result
-uses `Forming image` because the diagnostics do not distinguish auxiliary BP from
-estimation. The panel labels green GPU-completed progress `Last completed` and
+Autofocus additionally reports observed auxiliary formation, estimation and
+final-formation checkpoints; its accepted/declined correction outcome remains
+a separate detail. The panel labels green GPU-completed progress `Last completed` and
 keeps the cyan Received marker and percentage on the same track. The marker
 remains visible when the frontiers meet, including at zero and completion.
 `Updates on completion` replaces the running collection clock; there is no
@@ -516,18 +516,17 @@ native SDK text once. Timeline ticks never regenerate or download this canvas.
 The first completed image replaces it permanently. Headless execution emits no
 placeholder. Closing the window works while the first aperture is accumulating.
 
-The small timeline panel shows observed startup stage and elapsed time at 1 Hz;
-its stage comes from existing reader/BP diagnostics and presentation progress.
-It distinguishes starting up, receiving a collection, forming the first image
-after reader EOF, and preparing the display. It does not invent a percentage
-or claim a stage for which no diagnostic exists. The main placeholder stays
-static while that text changes independently.
+The progress panel shows the last observed processing checkpoint and unique
+received versus GPU-completed pulse counts, refreshing at 1 Hz. It has no
+elapsed-clock display or ETA. Stages without a diagnostic remain unknown;
+a busy GPU can delay presentation of an observed checkpoint. The main
+placeholder stays static while this panel changes independently.
 
 The left status panel uses 16-pixel titles and 14-pixel details at native canvas
-resolution. Collection names scroll above their corresponding thinner bars;
-image latency labels sit above the image-emission ticks. The footer remains
-112 pixels high by default. The sidebar title describes the displayed image;
-timeline labels describe collection history, which may run ahead of display.
+resolution. The footer remains 112 pixels high by default. The sidebar title
+describes the displayed image; the progress title describes the image being
+formed. The received/processed history describes pulse-batch activity, which
+may run ahead of display.
 
 GUI throughput uses readable SI prefixes, for example `12.4 Gpx*pulse/s`.
 The displayed number converts the same held report measurement, preserving
@@ -569,9 +568,8 @@ timeline cadence (default 10 Hz), without changing processing or event timestamp
 Identical bounded drawing/text snapshots skip GPU rasterization and display
 transport. Changed status, optional playback lag, or resize feedback can redraw
 the footer while preserving its event-time axis. Independent cached presentation
-continues servicing window events and closure. Collection-colored dwell bars and image-emission ticks are
-replaced by these two event lanes; the image title remains in the image and
-progress cards. Optional playback lag stays available. Checkpoint text refreshes at
+continues servicing window events and closure. The history contains these two
+event lanes; image titles remain in the completed-image and progress cards. Optional playback lag stays available. Checkpoint text refreshes at
 1 Hz. The main SAR image and HUD caches are unchanged. Timeline ticks do not
 rerun backprojection or scientific image rendering. X11 keeps the main image
 cached; native presentation composites its cached panels.
@@ -589,7 +587,7 @@ The history uses thin tracks and short cyan/green markers, with larger labels
 above and below the tracks. Thin neutral diagonals connect exact receipt and
 observed GPU-completion timestamps for the same source batch. Connecting areas
 are never filled. Pending work keeps its receipt tick without a diagonal to an
-invented completion at Now. Horizontal displacement describes observed delay,
+invented completion at the latest history endpoint. Horizontal displacement describes observed delay,
 including waiting, rather than GPU service time. A connection whose receipt
 predates the window is clipped geometrically without moving its endpoints.
 
@@ -603,7 +601,7 @@ remain. Each connector is one bounded GPU drawing command. No full-frame host
 raster or scientific image refresh is added. Both lanes retain the 20-second
 window and default 10 Hz cadence. Optional playback lag remains in the header.
 
-Both lane titles and the `20s` / `Now` bookends use identical, brighter glyph
+Both lane titles and the `-20s` / `Latest batch` bookends use identical, brighter glyph
 metrics within each layout: 16px in the full history and 14px in the compact
 history, slightly above the adjacent panel's body text and using the native monospace font. Titles stay above
 and below the tracks; time captions sit beside the tracks at their vertical
@@ -709,3 +707,9 @@ flush deferred inputs. No tensor copy or additional GPU wait is introduced.
 FMCW builds without the optional HoloViz package disable effective visualization
 before graph construction, regardless of YAML display or hold settings. Their
 processing graph runs normally without a display drain or final-window hold.
+
+## SAR presentation and progress
+
+SAR uses the shared dashboard configuration and presenter selection, with the formed image, docked timeline/status and progress rather than an independent visualization policy. The active scene name, H×W, pulse progress, BP rate, latency and paced lag derive from bounded host diagnostics. Optional `FormationHud` captures do not alter tensor contracts or formation results. A fixed CUDA-event ring uses nonblocking queries; missing history leaves progress unknown instead of delaying formation. Headless and visualization-disabled apps do not enable that tracking.
+
+The timeline distinguishes input/ingest from output/formation history and reports collect-versus-wall lag for paced playback. Status can show a completed autofocus refusal distinctly from accepted iterations, but cannot claim phase accuracy from convergence. Image panels preserve matching plot diagonals, typography, time bookends and final frames through shutdown. Presenter configuration, remembered choices, X11 transport and device boundaries follow the existing shared application policy. Close/Escape requests cooperative shutdown; finite/indefinite final-image holds are handled by the graph driver, so a raster must not block its own presentation partition waiting for a hold.

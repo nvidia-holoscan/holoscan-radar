@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Independent images demo: rotate six unique-IARP Umbra SNAPSHOT CPHDs (INPUT_DATA.md).
+# Independent images demo: rotate six unique-IARP Umbra SNAPSHOT CPHDs (applications/sar/tools/README.md).
 # Pull first (~10.5 GiB); the app never reaches the network.
 #
-#   python3 tools/sar_data/pull_cphd.py --app independent_images \
+#   uv run applications/sar/tools/pull_cphd.py --app independent_images \
 #     --dest data/sar
 #   Paths below resolve under the build data directory (default: data/).
 #
@@ -58,7 +58,7 @@ lattice:
 cphd_reader:
   coordinate_frame: ecef
   # 1024 pulses per tick (Ohio is 22 ticks). 100 was NVRadar
-  # Atlanta parity (NVRADAR_PARITY.md item 5), not an independent-images workflow
+  # Atlanta parity (spotlight README external parity notes), not an independent-images workflow
   # constraint. 32768 still fits a whole SNAPSHOT on this 96 GiB
   # GPU if you want one tick per collect.
   pulses_per_tick: 1024

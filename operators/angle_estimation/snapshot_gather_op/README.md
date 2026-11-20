@@ -19,6 +19,8 @@ rd_maps (per-channel) + CFARDetectorOp.detection_idx
   → SnapshotGatherOp → ⟨sparse angle estimator⟩.snapshot  [+ is_valid]
 ```
 
+Declarations and parameter defaults: [snapshot_gather_op.hpp](snapshot_gather_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -43,9 +45,6 @@ rd_maps (per-channel) + CFARDetectorOp.detection_idx
 | `snapshot_window` | `std::vector<int64_t>` (YAML); live POD `{doppler, range}` | `{0, 0}` | `[live]` Exact | Per-axis `(doppler, range)` neighborhood half-extent. `{0, 0}` → one snapshot (the detection cell). Empty → `{0, 0}`; size-1 → isotropic `{w, w}`. Cost: Free — a gather, no plan or coefficient rebuild. |
 | `doppler_edge` | `SnapshotEdgeMode` `{wrap, clamp, shift}` | `wrap` | static | Neighborhood behavior at the Doppler-axis edges. |
 | `range_edge` | `SnapshotEdgeMode` `{wrap, clamp, shift}` | `shift` | static | Same three behaviors on range. `wrap` is rarely physical for range bins. |
-
-Contract: [`OPERATOR_API.md` § `SnapshotGatherOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
 
 ## Algorithm
 
@@ -117,16 +116,6 @@ On Thor, `baseline-large` (32 channels, 512 × 1024 RD cells, 4096 detections, n
 | Double | 3.136229 ms | 2.985085 ms | 151.14 µs / 4.82% |
 
 These are scoped steady gains with tradeoffs. Fresh small-double p99 increased 30.43 µs and optional-output-minimal float p99 increased 35.56 µs; both also worsened in the screen. One large-double fresh frame reached 5.177 ms versus its original pair's maximum 3.195 ms despite a useful median. Fresh medium-double setup increased 0.835 ms and optional-minimal float cold time increased 18.41 µs. Fifty-frame p99 is descriptive; no startup, tail, arbitrary-shape, multi-GPU or direct consumer-chain guarantee is implied.
-
-Harness: `performance/operators/angle_estimation/snapshot_gather/adapter.cpp` (Graph dual-input runner). Size ladder `xs`…`xl` (channels × RD map × detection count) and windows `{0,0}`, `{1,1}`, `{2,2}`. It records cold, steady, and inline Exact `snapshot_window` override timing. Run the harness on the target deployment:
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_snapshot_gather_smoke
-```
 
 ## Usage
 

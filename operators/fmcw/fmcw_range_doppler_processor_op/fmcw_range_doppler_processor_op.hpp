@@ -141,7 +141,7 @@ class FMCWRangeDopplerProcessorOp : public holoscan::Operator<FMCWRangeDopplerPr
   Output<Tensor> range_bins{"range_bins"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // [live] Exact override ports (OPERATOR_API.md).
+  // [live] Exact override ports (the operator README).
   Input<wire::WindowSpecT> range_window_in{"range_window"};
   Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
   Input<bool> apply_dechirp_in{"apply_dechirp"};
@@ -157,7 +157,7 @@ class FMCWRangeDopplerProcessorOp : public holoscan::Operator<FMCWRangeDopplerPr
 
   Tensor retained_input_;
 
-  // Both axis outputs are optional/latched (OPERATOR_API.md).
+  // Both axis outputs are optional/latched (the operator README).
   LatchedOutput range_bins_out_;
   LatchedOutput velocity_bins_out_;
 

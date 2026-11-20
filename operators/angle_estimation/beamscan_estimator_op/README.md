@@ -19,6 +19,8 @@ SnapshotGatherOp.snapshot [+ is_valid] → BeamscanEstimatorOp
   → aoa_estimates [+ angle_spectrum] → FeatureAssemblyOp
 ```
 
+Declarations and parameter defaults: [beamscan_estimator_op.hpp](beamscan_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -49,10 +51,7 @@ SnapshotGatherOp.snapshot [+ is_valid] → BeamscanEstimatorOp
 | `az_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine`. Cost: Rebuilds weights. |
 | `el_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`; `[0]` gives a 1-D scan. Cost: Rebuilds weights. |
 | `array_taper` | `WindowSpec` | `kNone` (rectangular) | `[live]` Exact wire-schema override | Spatial amplitude taper; non-custom windows are separable on recognized filled URAs, while custom coefficients stay per-element. Cost: Rebuilds weights. |
-| `peak_interpolation` | `PeakInterpolation` | `none` | `[live]` Exact | `none` = argmax cell; `parabolic` = quadratic refinement (2-D interior peaks only). Cost: Free — no weight rebuild. |
-
-Contract: [`OPERATOR_API.md` § `BeamscanEstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md)
+| `peak_interpolation` | `PeakInterpolation` | `none` | `[live]` Exact | `none` = argmax cell; `parabolic` = quadratic refinement on each axis with at least three coordinates and an interior peak. Cost: Free — no weight rebuild. |
 
 ## Algorithm
 
@@ -114,16 +113,6 @@ Cold / first unseen steering key: device weight/grid build (same weight helper a
 A local Thor HSDK 5 engineering check used five warmups, 50 steady frames, three screen pairs and three fresh pairs. For baseline-large float (16 channels, 1024 items, nine looks, 61×31 beams), fresh compute medians changed 2.746724 → 2.545900 ms: paired saving 0.199546 ms (7.268%), with pair gains 7.247–7.406%. All eleven other case/precision endpoints in the six-case check met the declared median/pair risk allowance of max(5 microseconds, 5%). Both builds passed 47 native tests and exact comparisons under both public-output policies across seven cases, in both precisions, including minimal optional wiring. These results describe the measured workloads.
 
 Startup and tails are separate tradeoffs: fresh medium-float cold latency increased 0.712 ms, optional-minimal double setup increased 1.217 ms, large-double p99 increased 0.080 ms and small-float p99 increased 0.008 ms. The cached interpolation event changed 2.757 → 2.556 ms in float and 63.189 → 63.196 ms in double. Fifty-frame tails are descriptive; the retained benefit targets streaming large float workloads and establishes no startup or tail guarantee.
-
-Harness: `performance/operators/angle_estimation/beamscan_estimator/adapter.cpp` (Graph). Size ladder `xs`…`xl` (channels × detections × scan grid). Every selected size runs five isolated inline-override scenarios and reports `override_ms` / `override_delta_ms` for geometry, azimuth grid, elevation grid, taper, and interpolation. Optional `is_valid` is omitted from performance runs. No reference results are checked in; run:
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_beamscan_estimator_smoke
-```
 
 ## Usage
 

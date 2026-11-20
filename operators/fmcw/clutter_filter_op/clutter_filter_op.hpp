@@ -97,12 +97,12 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
 
   Input<Tensor> range_profiles{"range_profiles"};
   // HSDK 5 requires unique port names within an operator (inputs and
-  // outputs share one namespace). OPERATOR_API.md's logical output channel
+  // outputs share one namespace). the operator README's logical output channel
   // remains "range_profiles"; the physical port name is range_profiles_out.
   //  revisit naming once the full port is settled.
   Output<Tensor> range_profiles_out{"range_profiles_out"};
 
-  // [live] Exact override (OPERATOR_API.md).
+  // [live] Exact override (the operator README).
   Input<ClutterFilterMethod> method{"method"};
   Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
 

@@ -18,6 +18,8 @@ Use after dense TDM compensation or dense DDM demultiplexing to flatten TX/RX ma
 … → TDMDenseCompensationOp / DDMDenseDemultiplexOp → VirtualArrayAssemblyOp → CFARDetectorOp / SnapshotGatherOp / ⟨angle op⟩
 ```
 
+Declarations and parameter defaults: [virtual_array_assembly_op.hpp](virtual_array_assembly_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -38,13 +40,10 @@ Use after dense TDM compensation or dense DDM demultiplexing to flatten TX/RX ma
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
-| `tx_positions` | float vector, row-major `(num_tx, 3)` | none (required) | static (Params-only) | TX element positions (m). Length must match input `M_tx` Cost: Rebuilds the virtual plan + H2D into the ctor-sized index tables. |
-| `rx_positions` | float vector, row-major `(num_rx, 3)` | none (required) | static (Params-only) | RX element positions (m). Length must match `N_rx` Cost: Same as `tx_positions`. |
-| `wavelength` | float | none (required) | `[live]` Exact | Operating wavelength (m) for emitted geometry (`c / carrier_frequency`) Cost: Free for the gather; wire geometry metadata is rewritten each tick. |
+| `tx_positions` | float64 vector, row-major `(num_tx, 3)` | none (required) | static (Params-only) | TX element positions (m). Length must match input `M_tx` Cost: Rebuilds the virtual plan + H2D into the ctor-sized index tables. |
+| `rx_positions` | float64 vector, row-major `(num_rx, 3)` | none (required) | static (Params-only) | RX element positions (m). Length must match `N_rx` Cost: Same as `tx_positions`. |
+| `wavelength` | float64 | none (required) | `[live]` Exact | Operating wavelength (m) for emitted geometry (`c / carrier_frequency`) Cost: Free for the gather; wire geometry metadata is rewritten each tick. |
 | `overlap_policy` | enum `{dedup, average, keep_all}` | `dedup` | static (Params-only) | Coincident `p_virtual` handling; sets `num_virtual` Cost: Rebuilds the plan (gather vs average kernel). |
-
-Contract: [`OPERATOR_API.md` § `VirtualArrayAssemblyOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 
@@ -83,7 +82,7 @@ row  num_virtual:       [wavelength, geometry_type_code, 0]
   geometry_type_code: 0=ULA, 1=URA, 2=UCA, 3=CONFORMAL; NaN if unset
 ```
 
-Consumers receive the coherent descriptor with `from_wire`; direct angle operators do that in their live resolvers. Virtual positions do not depend on wavelength; only metadata does. `num_doppler` and `num_range` pass through unchanged. This is the public dense virtual-array boundary; fused sparse TDM/DDM operators emit the same sanctioned descriptor beside their final snapshots. C++ graphs connect it directly to angle operators' same-schema live inputs. Python remains on equivalent static Params because generated schema payloads are not exposed there.
+Consumers receive the coherent descriptor with `from_wire`; direct angle operators do that in their live resolvers. Virtual positions do not depend on wavelength; only metadata does. `num_doppler` and `num_range` pass through unchanged. This is the public dense virtual-array boundary; fused sparse TDM/DDM operators emit the same sanctioned descriptor beside their final snapshots. C++ graphs connect it directly to angle operators' same-schema live inputs. Python graphs can connect registered native descriptor ports directly, including these geometry sidebands. Logical descriptor mappings configure static Params; arbitrary generated wire-object construction is not exposed in Python.
 
 ## Shape and dtype rules
 
@@ -116,16 +115,6 @@ Consumers receive the coherent descriptor with `from_wire`; direct angle operato
 ## Performance
 
 **Cold.** First `(tx_positions, rx_positions, overlap_policy, M_tx, N_rx)`: host plan (`p_tx+p_rx`, grouping) + async H2D of index tables into the ctor-sized buffers, then gather/average kernel + host wire preparation. **Steady.** Same plan key: kernel + per-tick host wire preparation (wavelength may change without a plan rebuild). No FFT. A cache miss does not `cudaMalloc`. Averaging planes larger than 4096 cells use the retained 4096-cell target tiling (bounded second grid axis); smaller averaging planes and the dedup/keep_all copy path remain original. Member accumulation order is unchanged.
-
-Harness `performance/operators/fmcw/virtual_array_assembly/adapter.cpp`: size rungs `xs`–`xl` over `(M_tx, N_rx, num_doppler, num_range)`, overlap-policy variants. `array_geometry` is drained by a typed schema sink. No leading-batch rung. Every compute run inlines a mid-session `[live] wavelength` flip and reports `override_ms` / `override_delta_ms`.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_virtual_array_assembly_smoke
-```
 
 ## Usage
 

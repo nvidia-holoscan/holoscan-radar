@@ -25,7 +25,7 @@
 #                          (holoscan-cli passes --cmake-options through here;
 #                          -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF disables Python)
 #   CTEST_SUBMIT_URL       CDash submit URL; omit to skip submission
-#   EXCLUDE_LABELS         Label regex NOT to run (default: performance)
+#   EXCLUDE_LABELS         Optional label regex NOT to run
 #   INCLUDE_LABELS         Optional label regex to narrow to one tier, e.g.
 #                          -DINCLUDE_LABELS=statistical
 #   DASHBOARD_MODEL        Nightly | Experimental | Continuous
@@ -131,30 +131,13 @@ if(NOT DASHBOARD_MODEL)
     set(DASHBOARD_MODEL "Experimental")
 endif()
 
-# Run everything except the performance suite, which has its own invocation
-# (it measures rather than asserts, and only exists when
-# -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON).
-#
-# Exclude-only ON PURPOSE. An include list silently drops any label nobody
-# remembered to enumerate — that is precisely how the `integration` label went
-# unrun in CI for the entire life of the suite, taking the only cross-family
-# end-to-end test with it. Excluding by default means a new tier is visible
-# the day it is added, and the failure mode is a too-slow run rather than
-# silent loss of coverage.
-#
-# This includes the C++ Monte Carlo `statistical` tier. The Python provider
-# suite tests bindings and Graph execution; there is no Python statistical
-# CTest target in the HSDK 5 provider migration.
-if(NOT EXCLUDE_LABELS)
-    set(EXCLUDE_LABELS "performance")
-endif()
-
-# INCLUDE_LABELS is an optional narrowing knob for running one tier by hand,
-# e.g. -DINCLUDE_LABELS=statistical. Unset means "everything not excluded".
+# Run every registered test unless the caller supplies label filters.
+set(_label_args)
 if(INCLUDE_LABELS)
-    set(_label_args INCLUDE_LABEL "${INCLUDE_LABELS}" EXCLUDE_LABEL "${EXCLUDE_LABELS}")
-else()
-    set(_label_args EXCLUDE_LABEL "${EXCLUDE_LABELS}")
+    list(APPEND _label_args INCLUDE_LABEL "${INCLUDE_LABELS}")
+endif()
+if(EXCLUDE_LABELS)
+    list(APPEND _label_args EXCLUDE_LABEL "${EXCLUDE_LABELS}")
 endif()
 
 function(submit_results)

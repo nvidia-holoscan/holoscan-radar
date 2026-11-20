@@ -9,7 +9,7 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.4.0",
+        "version": "1.0.0",
         "changelog": {
             "0.4.0": "Add doppler_window API for window-weighted mean subtraction",
             "0.3.0": "Allow standalone method none as a materialized pass-through",

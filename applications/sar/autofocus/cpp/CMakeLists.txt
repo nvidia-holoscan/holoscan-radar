@@ -23,7 +23,7 @@ foreach(scenario blurred corrected reference)
     configure_file(../config/autofocus_${scenario}.yaml
         ${CMAKE_CURRENT_BINARY_DIR}/autofocus_${scenario}.yaml COPYONLY)
 endforeach()
-# The scene-axis presets tools/sar_autofocus/sweep.py sweeps across. Copied so
+# The scene-axis presets operators/sar/autofocus_op/tools/sweep.py sweeps across. Copied so
 # they can be run by hand the same way as the Kourou default.
 foreach(scene atlanta houston imperial)
     configure_file(../config/autofocus_${scene}.yaml

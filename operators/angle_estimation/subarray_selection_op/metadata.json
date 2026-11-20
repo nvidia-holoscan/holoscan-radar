@@ -9,7 +9,7 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.3.0",
+        "version": "1.0.0",
         "changelog": {
             "0.3.0": "Change optional array_geometry from a packed Tensor port to bounded host-backed WireArrayGeometry",
             "0.2.0": "Align compute with the tick-shell model, ctor-size the channel-index table, make geometry optional/latched after the required snapshot, and require identity channel order for pass-through",

@@ -42,7 +42,7 @@ struct MUSICRuntimeState;
 void retire_music_matx_caches();
 
 // Subspace (MUSIC) sparse-path DOA estimator. Contract reference:
-// docs/planning/OPERATOR_API.md → "MUSICEstimatorOp".
+// operators/angle_estimation/music_estimator_op/README.md.
 //
 // For each item, forms the sample covariance R_i = (1/K) Σ_k x_k x_kᴴ over
 // its valid snapshots, eigendecomposes it (ascending eigenvalues, columns of
@@ -171,7 +171,7 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
 
-  // Latched optional outputs (OPERATOR_API.md). Both come from one
+  // Latched optional outputs (the operator README). Both come from one
   // peak-extraction pass, which stops only once both latch.
   LatchedOutput doa_multi_out_;
   LatchedOutput source_count_out_;

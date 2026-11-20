@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# WORKFLOWS Figure 2 on Kourou / Guiana Space Centre -- the PGA
+# the autofocus estimation/reformation path on Kourou / Guiana Space Centre -- the PGA
 # vehicle, picked because it meets PGA's scene preconditions: a
 # stationary hard target, isolated 135x over its annulus, that stays
 # lit across the whole dwell (worst of 8 dwell blocks holds 0.68 of
-# its mean). Selected with tools/sar_autofocus/pga_screen.py, which
+# its mean). Selected with operators/sar/autofocus_op/tools/pga_screen.py, which
 # re-measures those two numbers on demand. Screening picked this
 # collect, but it does not make it the best of the four: Atlanta and
 # Houston both score higher on the same screen (see the app README).
@@ -16,7 +16,7 @@
 # network. Paths resolve under the build data directory (default:
 # data/).
 #
-#   python3 tools/sar_data/pull_cphd.py --app autofocus
+#   uv run applications/sar/tools/pull_cphd.py --app autofocus
 #
 # Dependency setup and the complete download-and-run quick-start:
 # applications/sar/autofocus/README.md
@@ -82,7 +82,7 @@ autofocus:
   # the best peak, and 11688 is all clutter and collapses to a
   # pass-through. The shipped 0.0438 is ~350 samples, below that
   # sweep's floor: it is the best cell of the later per-magnitude
-  # sweep (autofocus_op/OPEN_ITEMS.md section 6), where the first
+  # sweep (autofocus_op/README.md section 6), where the first
   # window has to match the error magnitude and 350 wins at the
   # small end. The two sweeps disagree because they score different
   # things -- peak here, affine-removed residual there.

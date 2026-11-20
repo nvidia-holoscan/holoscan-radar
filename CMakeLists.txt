@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 4.0)
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/HoloscanRadarCudaArchitectures.cmake")
 
 project(holoscan_radar
-    VERSION 0.2.0
+    VERSION 1.0.0
     DESCRIPTION "Accelerated radar signal processing operators for the Holoscan ecosystem"
     LANGUAGES CXX CUDA
 )
@@ -85,14 +85,6 @@ option(BUILD_SHARED_LIBS "Build Holoscan Radar libraries as shared libraries" ON
 # Artifact checks build fresh packages and are enabled by the CI test driver.
 option(HOLOSCAN_RADAR_TEST_PACKAGING "Test Debian and Python wheel artifacts" OFF)
 
-# Performance characterization suite (performance/). Off by default; it builds
-# standalone benchmark executables (not part of the operator libraries or the
-# CTest unit/statistical suites) that measure setup, steady-state compute, and
-# live-override latency. Enable with -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON.
-if(NOT DEFINED HOLOSCAN_RADAR_BUILD_PERFORMANCE)
-    set(HOLOSCAN_RADAR_BUILD_PERFORMANCE OFF
-        CACHE BOOL "Build the radar module's performance characterization suite")
-endif()
 
 # ---------------------------------------------------------------------------
 # Python package root in the build tree. Add this directory to PYTHONPATH for
@@ -156,9 +148,6 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
-if(HOLOSCAN_RADAR_BUILD_PERFORMANCE)
-    add_subdirectory(performance)
-endif()
 
 # ---------------------------------------------------------------------------
 # Packaging

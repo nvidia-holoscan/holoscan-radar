@@ -22,9 +22,9 @@ SPEC.loader.exec_module(cli)
 DIAGNOSTIC = (
     "CPHD input file not found:\n  sar/missing.cphd\n\n"
     "Next step: prepare the data\nRun on the host, from the repository root:\n\n"
-    "  uv run tools/sar_data/pull_cphd.py --config 'custom.yaml'\n\n"
+    "  uv run applications/sar/tools/pull_cphd.py --config 'custom.yaml'\n\n"
     "Add --list to preview without downloading.\n\n"
-    "More information\n  tools/sar_data/README.md\n  applications/sar/README.md"
+    "More information\n  applications/sar/tools/README.md\n  applications/sar/README.md"
 )
 
 
@@ -48,7 +48,9 @@ class ApplicationCliErrorTest(unittest.TestCase):
         self.assertIn("\033[1;36mNext step: prepare the data\033[0m", output)
         self.assertIn("\033[1mMore information\033[0m", output)
         # Keep the actual command unstyled and directly copyable.
-        self.assertIn("\n  uv run tools/sar_data/pull_cphd.py --config 'custom.yaml'\n", output)
+        self.assertIn(
+            "\n  uv run applications/sar/tools/pull_cphd.py --config 'custom.yaml'\n", output
+        )
 
     def test_no_color_and_dumb_terminal_disable_styling(self):
         for environment in ({"NO_COLOR": ""}, {"NO_COLOR": "1"}, {"TERM": "dumb"}):

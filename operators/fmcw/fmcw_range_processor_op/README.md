@@ -18,6 +18,8 @@ Use as the first spectral stage for real or complex FMCW ADC data when range pro
 adc_cube → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp
 ```
 
+Declarations and parameter defaults: [fmcw_range_processor_op.hpp](fmcw_range_processor_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -43,15 +45,12 @@ adc_cube → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessor
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
 | `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
-| `range_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Fast-time window before the range FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) Cost: Rebuilds cached premultiplier / window taps on an unseen spec, warning once. |
+| `range_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Fast-time window before the range FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) Cost: Rebuilds cached premultiplier / window taps on an unseen spec, with bounded reconfiguration diagnostics. |
 | `apply_dechirp` | bool | `false` | `[live]` Exact | Software dechirp; requires a valid `waveform` and complex-IF input Cost: Rebuilds the cached premultiplier when combined with the waveform / window. |
 | `waveform` | `FMCWWaveformDescriptor` | none (`is_valid() == false`) | `[live]` Exact via wire schema | Dechirp reference (`reference_samples`, or `slope` + `sample_rate`) and the `range_bins` axis Cost: Rebuilds dechirp reference / premultiplier when `apply_dechirp` is true; required for `range_bins`. |
 | `fft_norm` | `FftNorm` {`backward`, `ortho`, `forward`} | `backward` | `[live]` Exact | FFT normalization; `backward` keeps coherent-integration gain visible Cost: Free at the operator (MatX applies the convention on the FFT). |
 | `propagation_speed` | float64 | `299792458.0` m/s | Params-only | Wave speed for beat frequency → range Cost: Free (device fill of `range_bins` only). |
-| `nfft` | int64 | `0` (= `samples_per_chirp`) | `[live]` Exact | Fast-time FFT length; larger zero-pads for a finer interpolated grid over the same span Cost: Unseen length builds a MatX FFT plan; the stage keys `seen_fft_keys` and warns once per new length. |
-
-Contract: [`OPERATOR_API.md` § `FMCWRangeProcessorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md)
+| `nfft` | int64 | `0` (= `samples_per_chirp`) | `[live]` Exact | Fast-time FFT length; larger zero-pads for a finer interpolated grid over the same span Cost: Unseen length builds a MatX FFT plan; the stage keys `seen_fft_keys` and uses bounded reconfiguration diagnostics. |
 
 ## Algorithm
 
@@ -86,16 +85,6 @@ Invariants: leading named axes are processed independently (collapsed to a batch
 **Cold.** First tick (and first unseen window / dechirp-reference / FFT-length key) builds `RangeStageState`: `premultipliers` (complex path), `windows` (real path), and `seen_fft_keys`. MatX owns the cuFFT plan cache. `range_bins` is filled directly on the compute stream by a MatX range generator.
 
 **Steady.** Cached coefficients are reused; each tick loans `range_profiles` (and `range_bins` when a waveform is set) and enqueues the FFT. `[live]` `nfft` to an unseen length builds a new MatX plan. `[live]` `apply_dechirp` / `range_window` / `waveform` rebuild the premultiplier or window taps on an unseen key. `fft_norm` and the parameter-only `propagation_speed` do not invalidate those caches.
-
-Harness: `performance/operators/fmcw/fmcw_range_processor/recipe.yaml` defines small, medium, and large chirps × samples profiles, curated parameter cases, and one-frame `[live]` transitions, including cached and unseen FFT lengths. Its colocated `adapter.cpp` supplies contract-specific values. No measured numbers are recorded in-tree; run the harness for timings.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_fmcw_range_processor_smoke
-```
 
 ## Usage
 

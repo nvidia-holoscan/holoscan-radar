@@ -408,7 +408,7 @@ inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
 // (elevation) Vandermonde. Row/column subarray-averaging the full covariance
 // yields an Ny x Ny azimuth covariance and an Nz x Nz elevation covariance;
 // the existing 1-D rooting machinery on each yields candidate direction
-// cosines, paired by the full 2-D MUSIC subspace metric. See OPERATOR_API.md
+// cosines, paired by the full 2-D MUSIC subspace metric. See the operator README
 // for the method rationale (no canonical 2-D Root-MUSIC).
 // ---------------------------------------------------------------------------
 

@@ -18,6 +18,8 @@ Use between range compression and the Doppler FFT for SISO, SIMO, or deinterleav
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
 ```
 
+Declarations and parameter defaults: [clutter_filter_op.hpp](clutter_filter_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -41,9 +43,6 @@ FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
 | `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `method` | `ClutterFilterMethod` {`none`, `mean_subtraction`, `single_delay`, `double_delay`} | `mean_subtraction` | `[live]` Exact | Slow-time clutter suppression or materialized pass-through Cost: Shape-changing when a delay canceller is selected. |
 | `doppler_window` | `WindowSpec` | `none` | `[live]` Exact via wire schema | Weighting for `mean_subtraction`; ignored by other methods Cost: Unseen windows rebuild and cache taps, warning once. |
-
-Contract: [`OPERATOR_API.md` § `ClutterFilterOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 
@@ -78,16 +77,6 @@ All math lives in `clutter_stage.hpp` (`with_clutter_expr`). `compute()` is a th
 ## Performance
 
 **Cold / steady.** The weighted kernel caches generated projection taps. Its first configured window and later unseen overrides incur generation/upload; seen windows reuse cached taps. `doppler_window: none` retains the current uniform reduction. Delay cancellers remain slices plus an elementwise combo and ignore the window. Each tick loans `range_profiles_out`; a `[live]` `method` change can change `num_chirps_out`.
-
-Harness: `performance/operators/fmcw/clutter_filter/adapter.cpp`. Axes: size ladder `{xs, sm, md, lg, xl}` = `(16×128) … (256×2048)` chirps × range bins; method `{msub, sdel, ddel}`; optional channel batch. Default matrix: msub `{xs, md, lg, xl}` plus sdel/ddel on `md` and msub/`md`/4 channels. `--full` crosses methods × sizes and adds channel batches on `md`/`lg`. Every compute run inlines a mid-session `[live] method` flip and reports `override_ms` / `override_delta_ms`. No measured numbers are recorded in-tree.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_clutter_filter_smoke
-```
 
 ## Usage
 

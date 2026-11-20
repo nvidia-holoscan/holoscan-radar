@@ -68,7 +68,7 @@ real collections.
 
 ## Real collection preset
 
-The shipped Atlanta preset selects pulses `[91273, 102773)` from a 28.59 GiB Umbra CPHD, uses a fixed 8192 × 8192 ENU grid, and runs double-precision formation. Download the CPHD to the host `data/sar/` directory below; the preset resolves its relative path under the build data directory. The CPHD must supply the PVP fields required by `CPHDReaderOp`; the preset assumes its reference position and sample spacing.
+The shipped Atlanta preset selects pulses `[91273, 102773)` from a 28.59 GiB Umbra CPHD, uses a fixed 8192 × 8192 ENU grid, and defaults to single-precision samples/images with double-precision geometry. Set `sample_precision: double` to use double-precision samples/images as well. Download the CPHD to the host `data/sar/` directory below; the preset resolves its relative path under the build data directory. The CPHD must supply the PVP fields required by `CPHDReaderOp`; the preset assumes its reference position and sample spacing.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
@@ -102,18 +102,21 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 One complex image is reported at the final boundary. With `dump: true`, the full-resolution complex image is written as `.npy`; the default name derives from the CPHD stem. Visualization is a log-magnitude raster of the formed image, not a calibrated SAR product, with the source-branch on-image HUD. The optional `enu_origin_ecef` transform must match the lattice coordinate frame.
 
-`visualize: true` requests Holoviz when its HSDK 5 component and a usable
-X11 display are available. `headless: true` uses an offscreen CUDA sink.
-`visualize_size` bounds the display raster; it does not change formation
-resolution. `visualize_hold_s` only keeps a finite positive duration after
-an emit; indefinite hold and interactive X11 validation remain open.
-`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
-and `output.max_files` to control its files.
+`app.visualization.enabled: true` enables display; `headless: true` in
+that block selects offscreen rendering. `max_side` bounds the display raster
+without changing formation resolution. `final_image_hold_s` controls the
+interactive hold after completion: zero closes, a positive value holds for
+that many seconds, and a negative value waits for window closure or interruption.
+Headless and disabled-display runs do not hold. The former top-level
+`visualize`, `headless`, `visualize_size`, and `visualize_hold_s` keys remain
+aliases; see the [shared presentation controls](../../common/radar_app/viz/README.md#shared-presentation-controls).
+`dump: true` independently enables the synchronous `TensorDumpOp` branch;
+use `output.path` and `output.max_files` to control its files.
 
-See [SAR data preparation](../../../tools/sar_data/README.md),
+See [SAR data preparation](../tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
-[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).
+[shared architecture](../../../docs/ARCHITECTURE.md).
 
 ## Python graph
 
@@ -126,3 +129,11 @@ processing graph shown above. Run it from the host:
 
 See the [shared Python guide](../README.md#python-applications) for CPHD
 inputs, precision, programmatic composition, dumping, and shutdown behavior.
+
+## External parity qualification
+
+The historical Atlanta/NVRadar investigation established the importance of pairing range-profile centring with the correct reference frequency. Current contract range compression uses its centred stored sample, not an external VPH conditioner paired with SC0. Do not mix quantized phase centres with a differently computed R0, or add an extra shift to imitate an old PNG. The parsed `nvradar_vph_path` field has no runtime consumer in the current app.
+
+To reproduce a numerical comparison, use the same local CPHD bytes, pulse range, lattice/frame, range window, transform length/normalization, carrier convention, backend and sample/geometry precision on both sides. Dump complex images and compare physical peak locations, impulse response and amplitude; account for accumulation-order differences when varying pulses per tick. Rotate both APC/SRP and lattice consistently when changing ECEF/ENU, and vary one factor at a time. External NVRadar code/data are not bundled.
+
+Exact historical experimental settings and walk-backs remain available at Git revision `6c261de7c153daa0c8a6be9d6829b149cfbdf41c`, path `applications/sar/spotlight/NVRADAR_PARITY.md`. Those source-branch results do not establish parity for the current HSDK 5 executable. Full real-data focus/radiometric and backend qualification remain open.

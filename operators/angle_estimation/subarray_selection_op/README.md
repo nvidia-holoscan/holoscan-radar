@@ -21,6 +21,8 @@ SnapshotGatherOp.snapshot [+ is_valid]
     (or MVDREstimatorOp / MUSICEstimatorOp with spatial_smoothing)
 ```
 
+Declarations and parameter defaults: [subarray_selection_op.hpp](subarray_selection_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -47,9 +49,6 @@ SnapshotGatherOp.snapshot [+ is_valid]
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override on `array_geometry_in` | Holey virtual positions + wavelength. `num_elements` must match `snapshot` channels. Cost: Rebuilds the host plan and H2D channel-index table; logs INFO once per new key. |
 | `subarray` | `std::vector<int64_t>` | `{}` (auto) | `[live]` Exact host config Tensor, extent bounded by `max_subarray_channels` | Explicit channel indices; empty → largest filled ULA/URA. Re-emitted in lattice order. Cost: Same rebuild. |
 | `min_subarray_size` | int64 | `2` | static | Auto (and explicit) selection errors below this many channels. Cost: Rebuilds the plan (part of the cache key). |
-
-Contract: [`OPERATOR_API.md` § `SubarraySelectionOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md)
 
 ## Algorithm
 
@@ -108,8 +107,6 @@ Rejected combinations and the operator's own messages (selection-helper messages
 ## Performance
 
 Cold / first new configuration: host `build_subarray_selection` + H2D of an `int32` channel-index table of length `L`, plus the INFO log when selection is non-identity. Steady: one S1 gather (`P = 1`, no forward-backward) or a D2D pass-through, plus host wire preparation while geometry remains consumed. The replace-in-place cache key uses exact `ArrayGeometry`, explicit-index vector, and `min_subarray_size` equality.
-
-`performance/operators/angle_estimation/subarray_selection/adapter.cpp` reports cold and steady Graph timings over an item/channel/snapshot ladder on a holey ULA. Cold includes plan construction and the index-table upload; steady includes gather plus schema-aware geometry publication. The smoke has no timing threshold.
 
 ## Usage
 

@@ -42,7 +42,7 @@ struct MVDRRuntimeState;
 void retire_matx_solver_caches();
 
 // Adaptive (MVDR / Capon) sparse-path DOA estimator. Contract reference:
-// docs/planning/OPERATOR_API.md → "MVDREstimatorOp".
+// operators/angle_estimation/mvdr_estimator_op/README.md.
 //
 // For each item, forms the sample covariance R̂ = (1/K) Σ_k x_k·x_kᴴ over its
 // valid snapshots, applies diagonal loading (R + δI), inverts it, and scans the
@@ -60,7 +60,7 @@ void retire_matx_solver_caches();
 //                       an unwired port; publish a mask before its snapshot.
 // Out: aoa_estimates   — float32/float64, (num_items, 2).
 // Out: angle_spectrum  — float32/float64, (num_items, num_az, num_el). Always
-//                       emitted (optional in OPERATOR_API.md).
+//                       emitted (optional in the operator README).
 // Out: doa_multi       — float32/float64, (num_items, max_sources, 2). Always
 //                       emitted.
 // Out: source_count    — int32, (num_items,). Always emitted.
@@ -157,7 +157,7 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
 
-  // Latched optional outputs (OPERATOR_API.md). doa_multi and source_count
+  // Latched optional outputs (the operator README). doa_multi and source_count
   // come from one peak-extraction pass, which stops only once both latch.
   LatchedOutput doa_multi_out_;
   LatchedOutput source_count_out_;

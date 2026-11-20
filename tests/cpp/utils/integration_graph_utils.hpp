@@ -250,10 +250,9 @@ class TensorOverrideSourceOp final : public holoscan::Operator<> {
 // not the only way to get equal times in general — a data-triggered operator
 // inherits its input's capture time, so a production diamond feeding both ports
 // from one upstream frame aligns without co-emitting (see
-// docs/planning/OPERATOR_DEVELOPMENT.md, "Sample time propagation and aligned
-// joins"). Two separate OnClock sources additionally fail compile with
-// PARTITION_MANUAL_AUTHORING_REQUIRED on EA when combined with device Tensor
-// binding.
+// docs/ARCHITECTURE.md, "Temporal coherence and publication order"). Two separate OnClock sources
+// additionally fail compile with PARTITION_MANUAL_AUTHORING_REQUIRED on EA when combined with
+// device Tensor binding.
 class DualTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {

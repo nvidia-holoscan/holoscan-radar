@@ -114,7 +114,7 @@ class FMCWRangeProcessorOp : public holoscan::Operator<FMCWRangeProcessorParams>
   Output<Tensor> range_profiles{"range_profiles"};
   Output<Tensor> range_bins{"range_bins"};
 
-  // [live] Exact override ports (OPERATOR_API.md).
+  // [live] Exact override ports (the operator README).
   Input<wire::WindowSpecT> range_window_in{"range_window"};
   Input<bool> apply_dechirp_in{"apply_dechirp"};
   Input<wire::FMCWWaveformT> waveform_in{"waveform"};
@@ -126,7 +126,7 @@ class FMCWRangeProcessorOp : public holoscan::Operator<FMCWRangeProcessorParams>
 
   Tensor retained_input_;
 
-  // range_bins is optional/latched (OPERATOR_API.md).
+  // range_bins is optional/latched (the operator README).
   LatchedOutput range_bins_out_;
 
   // Kernel-side caches (window coefficients, dechirp reference, seen FFT

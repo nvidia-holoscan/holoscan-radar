@@ -2,9 +2,8 @@
 
 The HSDK 5 C++/CUDA SAR port includes `CPHDReaderOp<T>` and `TensorDumpOp`.
 The remaining planned CPHD/CRSD/SICD/SIDD readers and writers in the SAR
-planning documents are deferred. Each operator has an independent `OP_<name>`
-CMake gate; `CPHDReaderOp` needs tinyxml2. Python bindings and performance
-harnesses are outside this port.
+future scope are deferred. Each operator has an independent `OP_<name>`
+CMake gate; `CPHDReaderOp` needs tinyxml2. C++ and Python bindings are available; diagnostic checkout tools remain optional.
 
 | Operator | Ports | Role |
 | --- | --- | --- |
@@ -24,7 +23,4 @@ synchronously, so callers should expect a device synchronization and file I/O
 cost whenever a tick is dumped. `every_n` is an optional same-tick override;
 `max_files` is static. A Python interpreter is not needed for the C++ tests.
 
-The public contract is in
-[SAR OPERATOR_API.md](../../docs/planning/SAR/OPERATOR_API.md).
-Unresolved implementation and validation questions are collected in the
-[SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) and the historical per-operator notes.
+Public headers/schemas define declarations and defaults; the [reader](cphd_reader_op/README.md) and [dump sink](tensor_dump_op/README.md) guides own behavior and remaining qualification questions. [Architecture](../../docs/ARCHITECTURE.md) covers shared rules.

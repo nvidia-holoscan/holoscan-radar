@@ -19,6 +19,8 @@ Use after `SnapshotGatherOp` when a ULA, filled URA, or explicit shift-invariant
   → SnapshotGatherOp → snapshot → ESPRITEstimatorOp → aoa_estimates
 ```
 
+Declarations and parameter defaults: [esprit_estimator_op.hpp](esprit_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -54,9 +56,6 @@ Use after `SnapshotGatherOp` when a ULA, filled URA, or explicit shift-invariant
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis counts; exclusive with explicit `subarray_spec` Cost: Rebuilds plan + re-derives auto pairs. |
 | `forward_backward` | bool | `true` | static | FB looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
 | `subarray_spec` | `ShiftInvariantSubarrayPair` | auto (empty vectors) | static (Params only) | Explicit corresponding indices, or auto ULA/URA pairs Cost: Rebuilds index H2D. |
-
-Contract: [`OPERATOR_API.md` § `ESPRITEstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
 
 ## Algorithm
 
@@ -149,17 +148,7 @@ On the selected Thor HSDK 5 image, a paired engineering check (5 warmup frames, 
 
 Startup and tails remain separate tradeoffs: fresh large-double setup increased 0.172 ms; float cold medians increased 0.834 ms (small), 0.686 ms (large) and 1.013 ms (cached smoothing). Optional-medium float p99 increased 0.058 ms. The cached smoothing event changed 0.388 → 0.402 ms in float and 20.055 → 14.238 ms in double. These diagnostics do not establish startup or tail guarantees; the retained benefit targets streaming double precision.
 
-**`[live]` cost.** Scalar overrides are cheap; `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the pair, rebuilds the smoothing plan, and (auto URA) re-uploads the invariance tables on the tick it arrives. The Graph harness isolates all five live inputs.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_esprit_estimator_smoke
-```
-
-Harness axes: channels, detections, snapshots (ULA `xs`…`xl`); default matrix includes `ura_sm` (6×6); `--full` adds `ura_lg` (8×8). Each size runs isolated production-Exact scenarios for `array_geometry`, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources`. The Pfa scenario uses automatic source count; other steady paths fix one source.
+**`[live]` cost.** Scalar overrides are cheap; `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the pair, rebuilds the smoothing plan, and (auto URA) re-uploads the invariance tables on the tick it arrives.
 
 ## Usage
 

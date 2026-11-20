@@ -3,7 +3,7 @@
 
 // Source-count (model-order) estimation for the subspace angle estimators —
 // MUSIC / Root-MUSIC / ESPRIT — via the Exponential Fitting Test (EFT).
-// Settled decision: docs/planning/STATUS.md S2.
+// Automatic order uses covariance eigenvalues, never upstream detection counts.
 //
 // EFT (Quinlan, Barbot, Larzabal & Haardt, "Model Order Selection for Short
 // Data: An Exponential Fitting Test (EFT)", EURASIP JASP 2007,
@@ -30,7 +30,7 @@
 // guarantee. Tightening this to the exact MC-calibrated test later (if the
 // team wants precise Pfa control) is a documented follow-up, not a contract
 // change: the operator-facing `num_sources: auto` / `source_count_pfa`
-// contract (OPERATOR_API.md) does not pin the calibration method.
+// contract (the operator README) does not pin the calibration method.
 //
 // CUDA-free (lives in radar_common); the identical per-item decision, batched
 // over many items with the eigenvalues already resident on the GPU (as

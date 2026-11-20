@@ -18,6 +18,8 @@ Use after `FeatureAssemblyOp` when detections should be grouped by density in a 
 FeatureAssemblyOp.points → ClusterDBSCANOp → labels (+ sizes) → DetectionReductionOp
 ```
 
+Declarations and parameter defaults: [cluster_dbscan_op.hpp](cluster_dbscan_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -44,9 +46,6 @@ FeatureAssemblyOp.points → ClusterDBSCANOp → labels (+ sizes) → DetectionR
 | `min_points` | int64 | `0` → `2 · active_features` | `[live]` Exact | DBSCAN `minPts` (neighbors including self) Cost: Free (core threshold). |
 | `max_clusters` | int64 | `0` (uncapped) | `[live]` Exact | Keep the largest `max_clusters`; warn once on overflow Cost: Free (relabel surplus to noise). |
 
-Contract: [`OPERATOR_API.md` § `ClusterDBSCANOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/clustering/README.md`](../README.md)
-
 ## Algorithm
 
 `compute()` resolves the `[live]` `epsilon` / `min_points` / `max_clusters`
@@ -60,7 +59,7 @@ Custom CUDA (no MatX expression); CUB exclusive-sum densifies component roots.
 The normalized neighborhood test is:
 
 ```text
-q is a neighbor of p when Σ_a ((p_a − q_a) · eps_inv2_a) ≤ 1
+q is a neighbor of p when Σ_a ((p_a − q_a)² · eps_inv2_a) ≤ 1
 where eps_inv2_a = epsilon_a > 0 ? 1 / epsilon_a² : 0
 ```
 
@@ -98,9 +97,8 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
   | `num_features < 1` | `ClusterDBSCANOp: num_features must be >= 1` |
   | Empty `epsilon` | `ClusterDBSCANOp: epsilon is required` |
   | `epsilon` length not 1 and not `num_features` | `ClusterDBSCANOp: epsilon must be a scalar (length 1) or match num_features` |
-
-| Non-finite or negative entry | `ClusterDBSCANOp: epsilon values must be finite and >= 0` |
-| Scalar zero or all-zero vector | `ClusterDBSCANOp: epsilon must select at least one active feature` |
+  | Non-finite or negative entry | `ClusterDBSCANOp: epsilon values must be finite and >= 0` |
+  | Scalar zero or all-zero vector | `ClusterDBSCANOp: epsilon must select at least one active feature` |
   | `epsilon` override with no `max_features` | `ClusterDBSCANOp: MaxTensorExtents.max_features must be positive to accept an epsilon override` |
   | `num_points > INT_MAX` | `ClusterDBSCANOp: num_points exceeds the supported range` |
   | `num_points > max_points` | `ClusterDBSCANOp: num_points N exceeds MaxTensorExtents.max_points M` |
@@ -119,16 +117,6 @@ A paired Thor HSDK 5 check (5 warmups, 50 measured frames, three fresh pairs) me
 Latency tradeoffs remain: small double's fresh paired median slowed 10.028µs/2.089%. The capped float workload had recurring isolated slow frames; one fresh pair's maximum increased by 2.249ms even while its full 50-frame mean improved 6.18%. Setup, cold and override costs were mixed; these samples do not establish a tail-latency bound or universal improvement.
 
 **Live rebuilds.** `min_points` / `max_clusters` are free. A new effective `(epsilon, num_features)` pair rebuilds and uploads `1/ε²`; an unchanged pair reuses the cached device vector. Every epsilon value still selects a new neighbor graph computation for that tick.
-
-Harness: `performance/operators/clustering/cluster_dbscan/adapter.cpp` (Graph). Axes: `(N, F)` ladder `xs`…`xl5` (256×2 through 8192×5; well-separated blobs). It measures the production Exact `min_points` override; `epsilon` and `max_clusters` overrides are not timed. Both outputs are wired, so timings include `sizes` publication.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_cluster_dbscan_smoke
-```
 
 ## Usage
 

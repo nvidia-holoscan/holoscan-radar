@@ -23,7 +23,7 @@ function(holoscan_radar_select_application_build)
     set(HOLOSCAN_RADAR_APPLICATION "" CACHE STRING
         "Application whose dependencies form the default development build")
     if(NOT PROJECT_IS_TOP_LEVEL OR NOT HOLOSCAN_RADAR_APPLICATION OR BUILD_ALL OR
-            HOLOSCAN_RADAR_BUILD_TESTING OR HOLOSCAN_RADAR_BUILD_PERFORMANCE OR
+            HOLOSCAN_RADAR_BUILD_TESTING OR
             PKG_holoscan_radar OR MODULE_holoscan_radar OR SKBUILD)
         return()
     endif()

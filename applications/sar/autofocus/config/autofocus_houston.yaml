@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# WORKFLOWS Figure 2 on Houston -- a scene-axis config for
-# tools/sar_autofocus/sweep.py (see autofocus_atlanta.yaml for why
+# the autofocus estimation/reformation path on Houston -- a scene-axis config for
+# operators/sar/autofocus_op/tools/sweep.py (see autofocus_atlanta.yaml for why
 # the scene axis exists).
 #
 # Houston is the dense-urban case: a downtown core returns many
@@ -20,7 +20,7 @@
 #
 # Download once (26.13 GiB); the app never reaches the network.
 # Paths resolve under the build data directory (default: data/).
-# tools/sar_data/recipes/houston_1m.yaml pulls it.
+# applications/sar/tools/config/houston_1m.yaml pulls it.
 
 cphd:
   path: sar/houston_1p0m.cphd

@@ -25,33 +25,58 @@ Only the latest minor release receives fixes. While a new minor release is being
 ## Versions and tags
 
 Holoscan Radar follows [Semantic Versioning](https://semver.org/).
+The upcoming public release uses `1.0.0` for the module, native packages,
+Python wheel, operators, and applications. Its annotated release tag is
+`v1.0.0` on `release/v1.0`.
 
-| Tag | Meaning | Python version |
-| --- | --- | --- |
-| `vX.Y.Z-rcN` | Release candidate | `X.Y.ZrcN` |
-| `vX.Y.Z` | General availability release | `X.Y.Z` |
+Package versions come from checked-in files; the tag does not rewrite them.
+Before building release artifacts, synchronize:
 
-- Release tags are created only on `release/vX.Y` branches, by release managers.
-- Tags are annotated and immutable; a published tag is never moved or reused.
-- A GA tag points to the same commit as the release candidate it promotes.
-- Package versions are derived from the checked-in version.
+- `CMakeLists.txt`: `project(... VERSION X.Y.Z)`;
+- `pyproject.toml`: `[project].version`;
+- `metadata.json`: `module.version`;
+- each operator/application manifest's current `version`; and
+- `uv.lock`: refresh with `uv lock` after changing the Python project version.
+
+Update versioned package examples at the same time. Dependency versions,
+wire-schema versions, and historical changelog entries have their own meaning
+and do not change merely because a release number changes.
+
+Release-validation builds use the final package version, `1.0.0` for this
+release. Keep them in private validation storage until approved; do not publish
+successive validation builds under the same version to a public package index.
+
+Release tags are created only by release managers on `release/vX.Y`.
+Tags are annotated and immutable. A published tag or artifact is never moved,
+replaced, or reused; a subsequent change requires a new patch version.
 
 ## Release process
 
 1. **Feature freeze.** A release manager creates `release/vX.Y` from a passing `main` commit. After freeze, only bug, security, documentation, and packaging fixes are backported; other changes require release-manager approval.
-2. **Release candidates.** A release manager tags `vX.Y.Z-rcN`. Release candidates are built, validated, and security-reviewed before promotion.
-3. **General availability.** A release manager tags `vX.Y.Z` on the approved release candidate commit, publishes packages, and creates a GitHub Release with release notes.
-4. **Patch releases.** Fixes land on `main`, are backported to the active `release/vX.Y`, and follow steps 2–3 with an incremented patch version.
+2. **Prepare the version.** Set the checked-in versions to `X.Y.Z` and update package examples and release notes. For the upcoming release, use `1.0.0`.
+3. **Build and validate.** Build the native DEB/TGZ and Python wheel from the intended release commit. Record that commit, the SDK/container environment, artifact checksums, and validation results. Run the [full GPU and packaging suite](DEVELOPER.md#from-the-host-full-test-suite), the [pinned lint suite](DEVELOPER.md#pinned-lint-workflow), and the release security review. Keep artifacts private until approval. If a change is needed, build and validate again from the updated commit.
+4. **General availability.** After approval, create `vX.Y.Z` on the validated commit, publish the validated artifacts, and create a GitHub Release with release notes. Publish the same artifact bytes that passed validation. Release notes identify supported platforms/SDK versions, available artifacts, and known limitations.
+5. **Patch releases.** Fixes land on `main`, are backported to the active release branch, and repeat steps 2–4 with an incremented patch version.
 
 There is no fixed release schedule; releases are made as features and fixes are ready.
+These instructions prepare a release; changing version files does not publish one.
 
 ## Release artifacts
 
-| Artifact | Distribution |
-| --- | --- |
-| Source | GitHub tag and GitHub Release |
-| Debian packages (`libholoscan-radar-cuda-13`, `libholoscan-radar-dev-cuda-13`) | NVIDIA package repositories |
-| Python wheels (`holoscan-radar`, `holoscan-radar-cu13`) | PyPI |
+Release managers publish the following build artifacts after validation.
+
+| Artifact | Package or filename | Distribution |
+| --- | --- | --- |
+| Source | `vX.Y.Z` tag | GitHub tag and GitHub Release |
+| Debian package | `holoscan-radar`, containing native libraries and development files | NVIDIA package repository when published |
+| Native TGZ archive | `holoscan-radar-linux-<arch>-X.Y.Z.tar.gz`; `<arch>` is `x86_64` or `sbsa` | GitHub Release asset |
+| Python wheel | `holoscan-radar` | PyPI when published |
+
+The Debian package includes both native libraries and development files.
+The wheel requires the matching HSDK 5/CUDA 13
+runtime and does not install the SDK as a Python dependency. See
+[package contents and consumption](pkg/holoscan-radar/README.md) and the
+[Python provider guide](DEVELOPER.md#python-provider).
 
 ## Roles
 

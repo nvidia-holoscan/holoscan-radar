@@ -65,7 +65,7 @@ inline int64_t doppler_num_bins(int64_t num_chirps, const std::optional<int64_t>
 // configurations; ConfigCache warns once when it sees a new one after the
 // first.
 //
-// Steps (per the locked contract): window multiply along slow-time, FFT
+// Steps (per the documented behavior): window multiply along slow-time, FFT
 // along the slow-time (second-to-last) axis with nfft zero-padding and
 // cfg.fft_norm normalization, then fftshift along the Doppler axis when
 // cfg.center_zero_doppler (matching numpy.fft.fftshift semantics, including

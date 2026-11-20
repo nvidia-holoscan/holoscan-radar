@@ -133,7 +133,7 @@ SDK and CUDA toolkit. On Debian/Ubuntu:
 sudo apt-get install libtinyxml2-10   # libtinyxml2-dev for static builds
 ```
 
-The TGZ archive, for example `holoscan-radar-linux-x86_64-0.2.0.tar.gz` (`sbsa`
+The TGZ archive, for example `holoscan-radar-linux-x86_64-1.0.0.tar.gz` (`sbsa`
 on Arm), is a raw install tree of the packaged files. It has no top-level
 directory and keeps the DEB's `usr` prefix and multiarch `lib/<triplet>`
 directory. To build against it without installing the DEB, extract it and point
@@ -141,6 +141,6 @@ directory. To build against it without installing the DEB, extract it and point
 `LD_LIBRARY_PATH` only if the archive ships shared libraries:
 
 ```bash
-mkdir -p "$HOME/radar" && tar -xzf holoscan-radar-linux-x86_64-0.2.0.tar.gz -C "$HOME/radar"
+mkdir -p "$HOME/radar" && tar -xzf holoscan-radar-linux-x86_64-1.0.0.tar.gz -C "$HOME/radar"
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/radar/usr"
 ```

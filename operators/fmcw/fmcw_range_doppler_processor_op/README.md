@@ -18,6 +18,8 @@ Use when range compression, optional clutter suppression, and Doppler processing
 adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 ```
 
+Declarations and parameter defaults: [fmcw_range_doppler_processor_op.hpp](fmcw_range_doppler_processor_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -43,6 +45,11 @@ adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
 | `extents` | `MaxTensorExtents` | `max_chirps` and `max_range_bins` required; channel/TX bounds optional | Sizes Tensor pools and bounded workspaces before `arm()`. |
 
+When the Doppler FFT is zero-padded beyond `max_chirps`, also set
+`MaxTensorExtents.max_doppler_bins` to cover the largest output Doppler axis.
+If omitted, that pool bound defaults to `max_chirps`; increasing `nfft` or
+`nfft_doppler` alone does not enlarge the output pool.
+
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |
@@ -58,9 +65,6 @@ adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | `propagation_speed` | float64 | `299792458.0` m/s | Params-only | Beat → range Cost: Free (device fill of `range_bins` only). |
 | `nfft_range` | int64 | `0` (= `samples_per_chirp`) | `[live]` Exact | Range FFT length Cost: Unseen length builds a range FFT plan, warning once. |
 | `nfft_doppler` | int64 | `0` (= post-clutter chirp count) | `[live]` Exact | Doppler FFT length Cost: Unseen length builds a Doppler FFT plan, warning once. |
-
-Contract: [`OPERATOR_API.md` § `FMCWRangeDopplerProcessorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md) ·
 
 ## Algorithm
 
@@ -99,16 +103,6 @@ The fused `rd_maps` follow the split-chain numerical contract. The shared stages
 **Cold.** First tick (and first unseen window / dechirp-reference / FFT-length key) fills the ctor-allocated `RangeStageState` and `DopplerStageState` caches. Each tick also allocates the internal `profiles` cube (async device memory). Axis fills are MatX generators on the compute stream.
 
 **Steady.** Cached coefficients reused; each tick loans `rd_maps` (and the two axes when a waveform is set), writes `profiles`, and enqueues clutter-into-Doppler. Versus the split chain this saves one full-cube write+read, one kernel launch, and one async alloc/free per tick **plus** the graph-level cost of the extra split nodes. The FFTs still dominate. Compare whole workflows when deciding whether fusion helps an application.
-
-Harness: `performance/operators/fmcw/fmcw_range_doppler_processor/recipe.yaml` defines small, medium, and large profiles plus explicit parameter and one-frame live cases; its colocated `adapter.cpp` supplies contract-specific values. The tool times this operator alone. No measured numbers are recorded in-tree.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_fmcw_range_doppler_processor_smoke
-```
 
 ## Usage
 

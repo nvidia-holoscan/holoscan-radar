@@ -73,9 +73,9 @@ From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
-python3 -m pip install -r tools/sar_data/requirements.txt
+python3 -m pip install -r applications/sar/tools/requirements.txt
 mkdir -p data/sar
-python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
+uv run applications/sar/tools/subset_cphd.py applications/sar/tools/config/houston_1m.yaml \
   -o data/sar
 ./holoscan-radar run video_sar
 ```
@@ -99,22 +99,34 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 ## Output and display
 
-Each emission reports a complex image; the fixture produces five frames. A dump writes each formed image, whereas optional Holoviz shows a log-magnitude raster with the source-branch on-image HUD (scene name, formed size, BP rate, last-pulse latency, paced collect-vs-wall lag, APC look chevron) and a docked timeline strip (20 s dwell bars, image-emit ticks with last-pulse latency labels, 1 Hz lag HUD). `playback_rate: 1` paces the reader by CPHD transmit time (sleep when ahead of collect; no sleep when behind). The lag HUD is that slack polled live (`now` versus collect), as on the HSDK 4 demo. Real-time images are still not guaranteed. The reader must deliver the boundary on the final batch for the reset.
+Each emission reports a complex image; the fixture produces five frames.
+A dump writes each formed image. Optional Holoviz displays a log-magnitude
+raster with the collection name, formed dimensions, backprojection work/rate,
+GPU processing latency and sensor look annotation. The docked timeline shows
+received/processed pulse-batch events, matched receipt/completion connectors,
+and image progress; see the [shared timeline guide](../../common/radar_app/viz/README.md#docked-sar-timeline).
+`playback_rate: 1` paces the reader by CPHD transmit time, sleeping when ahead
+and proceeding without delay when behind. Optional lag is polled against that
+playback clock. Real-time formation is not guaranteed. The reader delivers the
+boundary on the final batch so the manager can reset the aperture.
 
 A required emit onto a full output queue aborts the run. After the operator Error, the Graph driver prints a prominent backpressure banner: lower `cphd_reader.playback_rate` or reduce the image size so the pipeline can keep up.
 
-`visualize: true` requests Holoviz when its HSDK 5 component and a usable
-X11 display are available. `headless: true` uses an offscreen CUDA sink.
-`visualize_size` bounds the display raster; it does not change formation
-resolution. `visualize_hold_s` only keeps a finite positive duration after
-an emit; indefinite hold and interactive X11 validation remain open.
-`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
-and `output.max_files` to control its files.
+`app.visualization.enabled: true` enables display; `headless: true` in
+that block selects offscreen rendering. `max_side` bounds the display raster
+without changing formation resolution. `final_image_hold_s` controls the
+interactive hold after completion: zero closes, a positive value holds for
+that many seconds, and a negative value waits for window closure or interruption.
+Headless and disabled-display runs do not hold. The former top-level
+`visualize`, `headless`, `visualize_size`, and `visualize_hold_s` keys remain
+aliases; see the [shared presentation controls](../../common/radar_app/viz/README.md#shared-presentation-controls).
+`dump: true` independently enables the synchronous `TensorDumpOp` branch;
+use `output.path` and `output.max_files` to control its files.
 
-See [SAR data preparation](../../../tools/sar_data/README.md),
+See [SAR data preparation](../tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
-[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).
+[shared architecture](../../../docs/ARCHITECTURE.md).
 
 ## Python graph
 

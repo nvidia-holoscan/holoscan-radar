@@ -56,7 +56,7 @@ struct RangeStageState {
   ConfigCache<bool> seen_fft_keys;
 };
 
-// Number of range bins produced for a given input, per the locked contract:
+// Number of range bins produced for a given input, per the documented behavior:
 // complex IF → nfft (default samples_per_chirp); real IF → nfft/2 + 1
 // (default samples_per_chirp/2 + 1).
 inline int64_t range_num_bins(bool complex_input, int64_t samples_per_chirp,
@@ -77,7 +77,7 @@ inline int64_t range_num_bins(bool complex_input, int64_t samples_per_chirp,
 // for unseen configurations; ConfigCache warns once when it sees a new one
 // after the first.
 //
-// Steps (per the locked contract): optional dechirp (complex input only;
+// Steps (per the documented behavior): optional dechirp (complex input only;
 // conjugate-multiply against the cached reference chirp), window multiply
 // along fast-time, FFT along the last axis with nfft zero-padding and
 // cfg.fft_norm normalization. No fftshift (bin 0 = zero range). All work is

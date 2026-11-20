@@ -24,7 +24,7 @@ compiling `group_by_label.cu` again.
 
 ## Shared descriptor types
 
-The public configuration plane has seven descriptors:
+The public configuration plane has ten descriptors:
 
 - `ArrayGeometry`
 - `ShiftInvariantSubarrayPair`
@@ -33,9 +33,13 @@ The public configuration plane has seven descriptors:
 - `FMCWWaveformDescriptor`
 - `DDMCodeDescriptor`
 - `TXSchedule`
+- `CoordinateFrame`
+- `SampleGeometry`
+- `LFMWaveformDescriptor`
 
 They are ordinary parameters and may also use same-named live input ports where
-an operator documents a live override. `MaxTensorExtents` is different: it is a
+an operator documents a live override. The [wire-schema catalog](radar_schemas/README.md)
+maps logical descriptors to their physical port payloads. `MaxTensorExtents` is different: it is a
 constructor sizing object used to bound tensor pools before graph activation;
 it never travels on a port.
 
@@ -88,13 +92,11 @@ memory.
 - GPU work runs on the activation's CUDA stream. Inputs may be retained after
   `compute()` returns when asynchronous kernels still read them.
 
-The locked interface definitions are in
-[`OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md), while each operator
-README gives the compact user-facing port, construction, and parameter tables.
+Public headers and schemas own declarations, types and defaults. Each operator README owns behavior and compact port, construction and parameter tables. Shared rules are in [architecture](../../docs/ARCHITECTURE.md).
 
 ## Configurable cache retention
 
-See the [shared cache budget contract](../../docs/planning/OPERATOR_API.md#retained-configuration-cache-budget)
+See the [shared architecture](../../docs/ARCHITECTURE.md)
 for the affected operators and defaults. For example, an application may retain
 up to 4 GiB of range-compression artifacts by adding this static parameter to
 its existing operator YAML block:

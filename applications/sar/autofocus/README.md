@@ -37,15 +37,13 @@ terminal:
 
 ```bash
 uv sync
-uv pip install --python .venv/bin/python -r tools/sar_data/requirements.txt
-source .venv/bin/activate
-python3 tools/sar_data/pull_cphd.py --app autofocus
+uv run applications/sar/tools/pull_cphd.py --app autofocus
 ```
 
 Wait for the download to succeed before continuing. It writes
 `data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd` (about 4.19 GiB).
 Existing readable files are reused. This command downloads Kourou only; see
-the [SAR data guide](../../../tools/sar_data/README.md#public-collection-downloads)
+the [SAR data guide](../tools/README.md#public-collection-downloads)
 for other scenes.
 
 The three comparison presets are included with the application; no config
@@ -111,7 +109,7 @@ build/autofocus/applications/sar/autofocus/cpp/outputs/reference/autofocus_refer
 
 ```bash
 results=build/autofocus/applications/sar/autofocus/cpp/outputs
-uv run tools/sar_data/view_image.py \
+uv run applications/sar/tools/view_image.py \
   "$results/blurred/autofocus_blurred_0.npy" \
   "$results/corrected/autofocus_corrected_0.npy" \
   "$results/reference/autofocus_reference_0.npy" \
@@ -132,11 +130,11 @@ plot when a desktop backend is available, where you can zoom into targets.
 To view any one image separately:
 
 ```bash
-uv run tools/sar_data/view_image.py build/autofocus/applications/sar/autofocus/cpp/outputs/reference/autofocus_reference_0.npy
+uv run applications/sar/tools/view_image.py build/autofocus/applications/sar/autofocus/cpp/outputs/reference/autofocus_reference_0.npy
 ```
 
 This writes `autofocus_reference_0.png` beside its `.npy`. See the
-[saved-image viewer guide](../../../tools/sar_data/README.md#view-saved-images)
+[saved-image viewer guide](../tools/README.md#view-saved-images)
 for display range and output options.
 
 ## Find and save output files
@@ -313,24 +311,24 @@ cap applies. An explicit `aux_lattice.num_v` overrides that automatic sizing.
 
 Two optional developer tools help investigate other data and settings:
 
-- [pga_screen.py](../../../tools/sar_autofocus/pga_screen.py) checks whether a
+- [pga_screen.py](../../../operators/sar/autofocus_op/tools/pga_screen.py) checks whether a
   dataset contains bright targets that are isolated from their surroundings
   and remain visible across the pulse range. Its scores help choose data;
   they do not predict correction accuracy.
-- [sweep.py](../../../tools/sar_autofocus/sweep.py) runs repeated injected-error
+- [sweep.py](../../../operators/sar/autofocus_op/tools/sweep.py) runs repeated injected-error
   experiments across settings or scenes and reports phase-error measurements.
   It exits nonzero if cases fail to execute or produce incomplete results.
 
-Neither tool is needed for the walkthrough. Run either script with `--help`
+This estimation/reformation graph is also called the Figure 2 path in source diagnostics; direct correction of a conjugate-grid image is the historical Figure 3 path. Neither tool is needed for the walkthrough. Run either script with `--help`
 for its options. See the
-[operator development notes](../../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+[operator development notes](../../../operators/sar/autofocus_op/README.md)
 for detailed experiment results, past defect investigations, and remaining work.
 
 ## Troubleshooting
 
 | Problem | Check |
 | --- | --- |
-| The app reports a missing CPHD | Run the matching download/preparation instructions in the [SAR data guide](../../../tools/sar_data/README.md); the app does not download data |
+| The app reports a missing CPHD | Run the matching download/preparation instructions in the [SAR data guide](../tools/README.md); the app does not download data |
 | The app exits without opening a window | The comparison presets set `visualize: false`; open the PNG from step 5 or use the viewer's `--show` option |
 | No `.npy` image appears | Check `dump: true`, a nonzero `output.max_files`, and the `TensorDumpOp: saved image` log for the actual path |
 | PGA applies no correction | Check the termination reason; this is intentional in the blurred and reference presets |
@@ -409,9 +407,9 @@ phase instead of running the estimation branch.
 `NullSinkOp` consumes the corrected auxiliary image because this application
 uses the phase estimate to form its final ground-grid image.
 
-See the [SAR operator contracts](../../../docs/planning/SAR/OPERATOR_API.md)
+See the [shared architecture](../../../docs/ARCHITECTURE.md)
 for port and parameter definitions and the
-[SAR workflows](../../../docs/planning/SAR/WORKFLOWS.md) for the wider pipeline design.
+[SAR workflows](../../../docs/WORKFLOWS.md) for the wider pipeline design.
 
 ## Run the generated-data tests
 
@@ -433,7 +431,7 @@ restores it.
 
 The small five-pulse test dataset cannot demonstrate PGA recovery. Use the
 real-data walkthrough for that comparison. The
-[SAR testing requirements](../../../docs/planning/SAR/TESTING.md) describe the
+[SAR testing requirements](../../../docs/TESTING.md) describe the
 accuracy criteria in more detail.
 
 ## Python graph

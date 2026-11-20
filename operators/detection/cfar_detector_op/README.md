@@ -19,6 +19,8 @@ rd_maps / rda_cube / power_map -> CFARDetectorOp
   -> detection_idx + detection_score + noise_estimate [ + detection_mask ]
 ```
 
+Declarations and parameter defaults: [cfar_detector_op.hpp](cfar_detector_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -66,9 +68,6 @@ rd_maps / rda_cube / power_map -> CFARDetectorOp
 | `max_detections` | int64 | `0` (uncapped) | `[live]` Exact | `> 0` caps `detection_idx` rows and warns on surplus Cost: Free (cap after count). |
 | `peak_mode` | enum {none, range_doppler, all} | `none` | static | Raw detections, per-plane RD maxima, or full N-D maxima Cost: NMS launch unless none. |
 | `peak_radius` | int64 vector | `[1]` | static | NMS half-width: scalar or RD pair for `range_doppler`; scalar or post-NCI-rank vector for `all`; zero excludes an axis Cost: Grows neighborhood traversal multiplicatively. |
-
-Contract: [`OPERATOR_API.md` § `CFARDetectorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/detection/README.md`](../README.md)
 
 ## Algorithm
 
@@ -282,16 +281,6 @@ These are steady-workload results. Medium double had fresh paired slowdowns with
 correlated receiver noise, shared-LO phase noise, mutual coupling, or clutter
 residue lower the effective degrees of freedom; calibrate an effective value
 or provide `alpha_lut` when nominal Pfa must be maintained under those models.
-
-Harness: `performance/operators/detection/cfar_detector/adapter.cpp` (Graph). It wires all five outputs, so steady timings include publication copies plus index compaction. Axes include size, variant, footprint, NCI fold, peak mode/radius, and alpha source. Rank-3/4 `all` rows characterize full N-D NMS.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_cfar_detector_smoke
-```
 
 ## Usage
 

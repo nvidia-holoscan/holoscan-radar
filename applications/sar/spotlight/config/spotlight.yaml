@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Spotlight demo: Umbra spotlight of Hartsfield-Jackson Atlanta, the
-# collection the MatX sar_bp example images (INPUT_DATA.md).
+# collection the MatX sar_bp example images (applications/sar/tools/README.md).
 #
 # Download once (28.59 GiB), then form. The app never reaches the
 # network; pulse_range seeks the 1° closest-approach frame.
@@ -33,7 +33,7 @@ cphd:
 # IARP-centred scene ENU. Pixel centres match NVRadar's meshgrid:
 #   min_x = (-N/2 + 0.5)*ps , max_y = (N-1)/2*ps
 enu_origin_ecef: [515952.45361328125, -5290612.79296875, 3513424.31640625]
-# Temporary: same APC bits as NVRadar's .dat xyz (see NVRADAR_PARITY.md).
+# Temporary: same APC bits as NVRadar's .dat xyz (see spotlight README external parity notes).
 quantize_phase_center_f32: false
 # Contract RC now rotates; do not inject their conditioner vph unless
 # diagnosing that path (their vph still pairs with SC0, not N/2).

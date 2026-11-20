@@ -101,7 +101,7 @@ repos:
         language: system
         pass_filenames: false
         files: >-
-          ^(operators/[^/]+/[^/]+_op/(README\.md|metadata\.json)|docs/planning/(OPERATOR_DEVELOPMENT|NEW_OPERATOR_CHECKLIST)\.md|\.github/workflows/scripts/check_operator_readmes\.py)$
+          ^(operators/[^/]+/[^/]+_op/(README\.md|metadata\.json)|DEVELOPER\.md|\.github/workflows/scripts/check_operator_readmes\.py)$
       - id: holoscan-metadata-validate
         name: validate metadata.json files against schemas
         # The lint requirements install the same CLI pin as the cli group.

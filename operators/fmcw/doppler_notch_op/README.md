@@ -18,6 +18,8 @@ Use after Doppler processing or dense DDM demultiplexing when a known physical r
 rd_maps + velocity_bins -> DopplerNotchOp -> rd_maps_out
 ```
 
+Declarations and parameter defaults: [doppler_notch_op.hpp](doppler_notch_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -44,8 +46,6 @@ rd_maps + velocity_bins -> DopplerNotchOp -> rd_maps_out
 | `stop_half_width` | float64 | `0.0` m/s | `[live]` Exact | Non-negative full-rejection half-width. |
 | `transition_width` | float64 | `0.0` m/s | `[live]` Exact | Non-negative raised-cosine width; zero is hard. |
 | `cyclic_velocity_axis` | bool | `true` | static | Wrap distance over the aliased interval. |
-
-Contract: [`OPERATOR_API.md` section `DopplerNotchOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 

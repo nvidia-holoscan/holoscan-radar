@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# WORKFLOWS Figure 2 on Imperial Valley -- a scene-axis config for
-# tools/sar_autofocus/sweep.py (see autofocus_atlanta.yaml for why
+# the autofocus estimation/reformation path on Imperial Valley -- a scene-axis config for
+# operators/sar/autofocus_op/tools/sweep.py (see autofocus_atlanta.yaml for why
 # the scene axis exists).
 #
 # This is the deliberate negative control: Capella stripmap over

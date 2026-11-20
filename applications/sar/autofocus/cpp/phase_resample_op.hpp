@@ -98,7 +98,7 @@ class PhaseResampleOp : public holoscan::Operator<> {
               [&](void* destination, std::size_t bytes) -> expected<void, Error> {
                 if (n_az == num_pulses_) {
                   // Straight copy: AutofocusOp.phase_correction is
-                  // pulse-indexed (OPERATOR_API.md), so no reordering belongs
+                  // pulse-indexed (the operator README), so no reordering belongs
                   // here. Checked rather than assumed -- rolling this vector
                   // by n/2 either way costs peak recovery (0.55 -> 0.33 on
                   // Kourou), which is what an unnecessary fftshift looks like.

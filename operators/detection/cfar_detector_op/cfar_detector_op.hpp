@@ -288,7 +288,7 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
   Output<Tensor> noise_estimate{"noise_estimate"};
   Output<Tensor> detection_idx{"detection_idx"};
   Output<Tensor> cfar_power{"cfar_power"};
-  // [live] Exact overrides, Params order (OPERATOR_API.md).
+  // [live] Exact overrides, Params order (the operator README).
   Input<int64_t> os_rank{"os_rank"};
   Input<CfarCellWindowOverride> guard_cells{"guard_cells"};
   Input<CfarCellWindowOverride> training_cells{"training_cells"};

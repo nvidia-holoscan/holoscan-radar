@@ -243,7 +243,7 @@ readback checks wide and compact layouts: completed pairs produce thin sloping
 lines instead of interval fills, connections crossing the history edge retain
 their true slope, and pending work has no fabricated completion endpoint.
 Both lane labels use the same 16px full/14px compact font above/below the tracks;
-`20s` and `Now` use matching sizes in side gutters at the tracks' midpoint.
+`-20s` and `Latest batch` use matching sizes in side gutters at the tracks' midpoint.
 A native GPU composition check compares the actual rendered common prefix of
 the two labels, independently of distinct words' ascenders/descenders. A long completed interval
 still produces only a short green completion marker. These tests use controlled
@@ -266,4 +266,4 @@ separate. `ShutdownSignals.*` covers delivery on a thread that predates handler
 installation, unchanged signal masks, prior-disposition restoration, and
 exclusive ownership. The applications use caller-managed HSDK sessions so
 Nsight helper threads do not violate managed-signal admission. See
-[SDK_DEVELOPMENT.md](../../SDK_DEVELOPMENT.md) for a profiling invocation.
+[SDK setup](../../DEVELOPER.md) for a profiling invocation.

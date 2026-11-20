@@ -19,6 +19,8 @@ Use after `SnapshotGatherOp` when adaptive null placement and interference rejec
   → SnapshotGatherOp → snapshot → MVDREstimatorOp → aoa_estimates
 ```
 
+Declarations and parameter defaults: [mvdr_estimator_op.hpp](mvdr_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -56,9 +58,6 @@ Use after `SnapshotGatherOp` when adaptive null placement and interference rejec
 | `max_sources` | int64 | `1` | `[live]` Exact | Capon peaks to report (`aoa_estimates` is always the strongest) Cost: Reallocates `doa_multi`; cap `64`. |
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis sub-array **counts** on a filled ULA/URA Cost: Rebuilds plan + index H2D; warns once. |
 | `forward_backward` | bool | `true` | static | Conjugate-reversed looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
-
-Contract: [`OPERATOR_API.md` § `MVDREstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
 
 ## Algorithm
 
@@ -139,17 +138,7 @@ On Thor, `optional-minimal-medium` (8 channels, 128 items, 32 snapshots, 41 × 2
 
 Startup and tails varied: fresh cached-smoothing double cold time increased 1.830 ms, medium float cold time increased 0.679 ms, and large double median p99 increased 0.246 ms (worst maximum +1.208 ms). One target pair also had slightly worse tails despite a better median. Fifty-frame p99 is descriptive; these results provide no startup, tail, arbitrary-shape or multi-GPU guarantee.
 
-**`[live]` cost.** `diagonal_loading` is free. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The Graph harness isolates all six live inputs.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_mvdr_estimator_smoke
-```
-
-Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`xl`; default smoke `xs`/`sm`/`md`). Every size isolates production Exact timing for `array_geometry`, both scan grids, `spatial_smoothing`, `diagonal_loading`, and `max_sources`. Run the harness on the target GPU; results are hardware-dependent.
+**`[live]` cost.** `diagonal_loading` is free. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives.
 
 ## Usage
 

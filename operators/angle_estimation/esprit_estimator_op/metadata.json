@@ -9,7 +9,7 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.4.0",
+        "version": "1.0.0",
         "changelog": {
             "0.4.0": "Cleanup: exact optional mask, reusable workspace, captured bounds, all-live production timing, and direct SubarraySelection integration",
             "0.3.0": "Document radar_boresight as the default angle convention",

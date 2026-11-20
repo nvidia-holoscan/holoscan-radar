@@ -1,8 +1,7 @@
 # SAR formation operators
 
 The HSDK 5 C++/CUDA port implements five SAR library operators. The CPHD reader
-and tensor dump are in [operators/io](../io/README.md). All floating-point
-operators instantiate `<float>` and `<double>`; data ports use plain tensors
+and tensor dump are in [operators/io](../io/README.md). Floating-point operators support single and double samples, with separate geometry precision on the manager and backprojector; data ports use plain tensors
 with named axes. Fat outputs capture `MaxTensorExtents` when added to the graph.
 
 | Operator | Main data flow | Role |
@@ -20,12 +19,9 @@ when unwired. The range stage emits `range_window_out` and backprojection emits
 `sample_geometry_out` as descriptor outputs with distinct names from their
 inputs. `PhaseCorrectionOp` likewise uses `range_profiles_out`.
 
-The [SAR operator contract](../../docs/planning/SAR/OPERATOR_API.md) defines
-shapes, defaults, and numerical conventions. The
-[SAR applications](../../applications/sar/README.md) shows
+Public headers/schemas define declarations and defaults; operator READMEs define behavior. [Shared architecture](../../docs/ARCHITECTURE.md) covers cross-cutting rules. The
+[SAR application index](../../applications/sar/README.md) shows
 five runnable formation modes plus the autofocus workflow. Direct-sampled and
 deramped branches and standard-format product writers remain planned, not
 implemented in this port.
-The copied NVRadar kernels require the recorded review in the untracked
-`OPEN_ITEMS.md`; neither that review nor public-collection validation is
-implied by the synthetic C++ tests.
+Synthetic C++ tests establish analytic behavior; real-data focus, radiometry, and backend parity require separate qualification.

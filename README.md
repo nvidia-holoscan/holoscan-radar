@@ -7,7 +7,7 @@ without pipeline-specific glue between processing stages.
 Holoscan Radar targets HSDK 5. The Holoscan CLI pulls the public GA SDK image
 `nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13` when needed; the
 devcontainer uses the same image. Setup and Python provider requirements are
-documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+documented in [SDK setup](DEVELOPER.md).
 
 ## Quick start
 
@@ -30,7 +30,7 @@ For offline SAR fixture checks, run `./holoscan-radar test` on the host; it
 includes the registered SAR smokes. The shipped SAR YAML files are real-data
 presets and need local CPHD data before direct execution. See the
 [SAR application index](applications/sar/README.md) and
-[CPHD preparation guide](tools/sar_data/README.md). The fixture checks graph
+[CPHD preparation guide](applications/sar/tools/README.md). The fixture checks graph
 execution, not focus on public collections.
 
 ## Operator groups
@@ -41,7 +41,7 @@ execution, not focus on public collections.
 | [Detection](operators/detection/README.md) | CFAR, feature assembly, cluster reduction, selective multi-source expansion |
 | [Angle estimation](operators/angle_estimation/README.md) | Snapshot gathering, array selection, Beamscan, MVDR, MUSIC, Root-MUSIC, ESPRIT, and dense beamforming |
 | [Clustering](operators/clustering/README.md) | DBSCAN over caller-selected detection features |
-| [SAR](operators/sar/README.md) | Range compression, aperture management, backprojection, and phase correction |
+| [SAR](operators/sar/README.md) | Range compression, aperture management, backprojection, phase correction, and autofocus |
 | [SAR I/O](operators/io/README.md) | CPHD decoding and diagnostic tensor dumps |
 
 Every public operator README starts with the same compact reference: purpose,
@@ -50,7 +50,7 @@ parameters. Precision is fixed per instance (`float` or `double`), and GPU
 execution is required.
 
 Shared descriptors and tensor conventions are documented in
-[`operators/common/README.md`](operators/common/README.md). The FMCW operator API reference is [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md); the current HSDK 5 SAR contract is [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md).
+[`operators/common/README.md`](operators/common/README.md). Public headers and schemas define declarations and defaults; operator READMEs define behavior. Shared rules are in [architecture](docs/ARCHITECTURE.md).
 
 ## Example applications
 
@@ -68,6 +68,7 @@ Shared descriptors and tensor conventions are documented in
 | [SAR tiled strip](applications/sar/tiled_strip/README.md) | Tile formation and parent mosaic |
 | [SAR continuous strip](applications/sar/continuous_strip/README.md) | Scrolling lattice and parent mosaic |
 | [SAR independent images](applications/sar/independent_images/README.md) | One restaged image per collection |
+| [SAR autofocus](applications/sar/autofocus/README.md) | Estimate phase error on an auxiliary image, correct retained pulses, and form the product |
 
 Application READMEs include the exact graph and runnable commands. Shared graph
 driving, simulation sources, reporting, and visualization support lives in
@@ -93,7 +94,7 @@ To run a Python application:
 ```
 
 The Python provider is optional in ordinary C++ builds; see
-[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) for SDK components and packaging.
+[SDK setup](DEVELOPER.md) for SDK components and packaging.
 It exposes all 33 public operators through 68 native registrations under
 `holoscan.radar` and thirteen Python Graph workflows through
 `holoscan_radar.applications`: seven FMCW and six SAR. See the
@@ -102,16 +103,14 @@ pairs, input data, visualization, and CLI examples.
 
 For manual CMake and targeted CTest work **inside** a development container,
 see [`DEVELOPER.md`](DEVELOPER.md#inside-a-development-container). The same
-guide covers host-side lint. Performance measurements and their container-side
-build commands are documented in [`DEVELOPER.md`](DEVELOPER.md#performance-characterization)
-and [performance/README.md](performance/README.md).
+guide covers host-side lint.
 
 ## Project references
 
 - [`DEVELOPER.md`](DEVELOPER.md): build, test, lint, and contribution workflow
 - [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309): deferred product, algorithm, performance, and tooling work
-- [`docs/planning/WORKFLOWS.md`](docs/planning/WORKFLOWS.md): supported radar chains and port wiring
-- [`docs/planning/TESTING.md`](docs/planning/TESTING.md): test strategy and analytic ground truth
+- [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md): supported radar chains and port wiring
+- [`docs/TESTING.md`](docs/TESTING.md): test strategy and analytic ground truth
 
 ## License
 

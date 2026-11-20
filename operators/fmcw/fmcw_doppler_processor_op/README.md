@@ -18,6 +18,8 @@ Use after range compression and optional clutter filtering to transform slow-tim
 FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → rd_maps
 ```
 
+Declarations and parameter defaults: [fmcw_doppler_processor_op.hpp](fmcw_doppler_processor_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -38,19 +40,21 @@ FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → rd_map
 | Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
 | `extents` | `MaxTensorExtents` | `max_chirps` and `max_range_bins` required; channel/TX bounds optional | Sizes Tensor pools and bounded workspaces before `arm()`. |
 
+When the Doppler FFT is zero-padded beyond `max_chirps`, also set
+`MaxTensorExtents.max_doppler_bins` to cover the largest output Doppler axis.
+If omitted, that pool bound defaults to `max_chirps`; increasing `nfft` or
+`nfft_doppler` alone does not enlarge the output pool.
+
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
 | `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
-| `doppler_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Slow-time window before the Doppler FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) Cost: Rebuilds cached window taps on an unseen spec, warning once. |
+| `doppler_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Slow-time window before the Doppler FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) Cost: Rebuilds cached window taps on an unseen spec, with bounded reconfiguration diagnostics. |
 | `center_zero_doppler` | bool | `true` | `[live]` Exact | Center DC on the Doppler axis; else bin 0 is DC Cost: Free (permute / `fftshift1D` choice). |
 | `waveform` | `FMCWWaveformDescriptor` | none (`is_valid() == false`) | `[live]` Exact via wire schema | Carrier → `λ`, PRI → PRF for the velocity axis Cost: Free for the FFT; required for `velocity_bins`. |
 | `fft_norm` | `FftNorm` {`backward`, `ortho`, `forward`} | `backward` | `[live]` Exact | FFT normalization; `backward` keeps coherent-integration gain visible Cost: Free at the operator (MatX applies the convention on the FFT). |
-| `nfft` | int64 | `0` (= `num_chirps`) | `[live]` Exact | Doppler FFT length; larger interpolates the velocity grid over the same span Cost: Unseen length builds a MatX FFT plan; the stage keys `seen_fft_keys` and warns once per new length. |
-
-Contract: [`OPERATOR_API.md` § `FMCWDopplerProcessorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md) ·
+| `nfft` | int64 | `0` (= `num_chirps`) | `[live]` Exact | Doppler FFT length; larger interpolates the velocity grid over the same span Cost: Unseen length builds a MatX FFT plan; the stage keys `seen_fft_keys` and uses bounded reconfiguration diagnostics. |
 
 ## Algorithm
 
@@ -81,16 +85,6 @@ Invariants: leading named axes are processed independently (collapsed to a batch
 **Cold.** First tick (and first unseen window / FFT-length key) fills the ctor-allocated `DopplerStageState` caches: `windows` and `seen_fft_keys`. MatX owns the cuFFT plan cache. `velocity_bins` is filled directly on the compute stream by MatX `fftfreq` / `fftshift1D`.
 
 **Steady.** Cached window taps are reused; each tick loans `rd_maps` (and `velocity_bins` when a waveform is set) and enqueues the permute + FFT + optional shift. `[live]` `nfft` to an unseen length builds a new MatX plan. `[live]` `doppler_window` rebuilds taps on an unseen key. `center_zero_doppler` and `fft_norm` do not invalidate those caches.
-
-Harness: `performance/operators/fmcw/fmcw_doppler_processor/recipe.yaml` defines small, medium, and large chirps × range bins profiles, curated parameter cases, and one-frame `[live]` transitions, including cached and unseen FFT lengths. Its colocated `adapter.cpp` supplies contract-specific values. No measured numbers are recorded in-tree; run the harness for timings.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_fmcw_doppler_processor_smoke
-```
 
 ## Usage
 

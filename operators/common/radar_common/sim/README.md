@@ -187,3 +187,9 @@ element counts + spacing (in wavelengths).
 downstream float32 processing floor. The CPU reference is deliberately kept
 STL-only and outside the operators tree so it stays an implementation-independent
 oracle (see `tests/cpp/common/test_sim_gpu.cpp`).
+
+## SAR analytic fixtures
+
+`sar_phase_history_sim.hpp` is the independent STL-only compensated phase-history model. For pulse `p` and sample `k`, sum target amplitude times `exp(-j 4π f_k ΔR_p / c)`, where `ΔR_p = |APC_p - target| - |APC_p - SRP_p|`. The sign pairs with CPHD SGN=-1 and inverse range compression. Frequency samples span first to last across the bandwidth, so spacing is `bandwidth / (num_samples - 1)`. Geometry/ranges are calculated in double precision. Optional per-pulse differential ranges express range migration.
+
+The model assumes stationary ideal point scatterers and stop-and-hop monostatic propagation, without distributed speckle, multipath, atmosphere, moving targets or bistatic geometry. Arbitrary Cartesian 3-D positions do not impose a flat Earth. Fixtures validate physical peak position, range/azimuth resolution, phase and window response; they do not qualify real scattering or radiometry. Compare against independent analytic predictions and simulator self-checks, never a checksum across toolchains or merely a round trip through production processing.

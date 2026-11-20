@@ -88,4 +88,4 @@ docker pull nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13
 
 The image version, Holoscan CLI commands, and current packaging limitation are
 documented in
-[`SDK_DEVELOPMENT.md`](../SDK_DEVELOPMENT.md).
+[SDK setup](../DEVELOPER.md).
