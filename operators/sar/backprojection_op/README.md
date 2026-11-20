@@ -128,7 +128,7 @@ control values, and invalid axes. See the
 
 ## Remaining qualification and contract questions
 
-NVRadar-derived kernels retain an unresolved OSRB disposition obligation. Their source is NVRadar `bp_kernels.py` at SHA `37c1cb29355bcfe256ae728f51dd47071847d949`. All backend names being dispatched does not establish numerical parity: qualify precision, even-length origin/phase, and real-data focus for each selected NVRadar/MatX variant. The z0 backend is for planar scenes. Do not compensate origin differences with an ad hoc R0 or profile shift.
+All backend names being dispatched does not establish numerical parity: qualify precision, even-length origin/phase, and real-data focus for each selected NVRadar/MatX variant. The z0 backend is for planar scenes. Do not compensate origin differences with an ad hoc R0 or profile shift.
 
 Explicit-points mode is remembered on first matching `sample_points` arrival rather than inferred from wiring; a missing first sample can therefore select lattice mode. A scroll tick missing its live lattice falls back to the original Params lattice and can request an invalid backward scroll. Whether a scrolling miss should mean no change requires contract review; this cleanup does not change Exact/SafeDefault semantics. Publish the current lattice for each tick.
 

@@ -24,4 +24,4 @@ Public headers/schemas define declarations and defaults; operator READMEs define
 five runnable formation modes plus the autofocus workflow. Direct-sampled and
 deramped branches and standard-format product writers remain planned, not
 implemented in this port.
-The copied NVRadar kernels carry the OSRB obligation documented in the [backprojection guide](backprojection_op/README.md#remaining-qualification-and-contract-questions). Synthetic C++ tests do not complete that review or real-data qualification.
+Synthetic C++ tests establish analytic behavior; real-data focus, radiometry, and backend parity require separate qualification.
