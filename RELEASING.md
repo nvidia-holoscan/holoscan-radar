@@ -46,13 +46,22 @@ Release-validation builds use the final package version, `1.0.0` for this
 release. Keep them in private validation storage until approved; do not publish
 successive validation builds under the same version to a public package index.
 
+Release candidates use annotated source tags `vX.Y.Z-rcN` on `release/vX.Y`.
+A candidate tag may be published before qualification; its annotation must state
+that qualification is pending and record the frozen source commit. Candidate
+tags do not imply passing checks or release approval. Keep validation artifacts
+private and retain the final package version while iterating on candidates.
+Never move a candidate tag: changed release source requires the next RC number.
+The GA tag points to the approved candidate commit, and publication uses the
+exact artifact bytes that passed validation.
+
 Release tags are created only by release managers on `release/vX.Y`.
 Tags are annotated and immutable. A published tag or artifact is never moved,
-replaced, or reused; a subsequent change requires a new patch version.
+replaced, or reused; changes after GA require a new patch version.
 
 ## Release process
 
-1. **Feature freeze.** A release manager creates `release/vX.Y` from a passing `main` commit. After freeze, only bug, security, documentation, and packaging fixes are backported; other changes require release-manager approval.
+1. **Feature freeze.** A release manager creates `release/vX.Y` from a passing `main` commit. When a release manager explicitly chooses to publish an unqualified candidate first, freeze the latest `main` commit, create the release branch and pending-qualification RC tag, then complete all validation before promotion. After freeze, only bug, security, documentation, and packaging fixes are backported; other changes require release-manager approval.
 2. **Prepare the version.** Set the checked-in versions to `X.Y.Z` and update package examples and release notes. For the upcoming release, use `1.0.0`.
 3. **Build and validate.** Build the native DEB/TGZ and Python wheel from the intended release commit. Record that commit, the SDK/container environment, artifact checksums, and validation results. Run the [full GPU and packaging suite](DEVELOPER.md#from-the-host-full-test-suite), the [pinned lint suite](DEVELOPER.md#pinned-lint-workflow), and the release security review. Keep artifacts private until approval. If a change is needed, build and validate again from the updated commit.
 4. **General availability.** After approval, create `vX.Y.Z` on the validated commit, publish the validated artifacts, and create a GitHub Release with release notes. Publish the same artifact bytes that passed validation. Release notes identify supported platforms/SDK versions, available artifacts, and known limitations.
