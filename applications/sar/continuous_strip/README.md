@@ -98,20 +98,43 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 Each scroll emission reports an image; the mosaic places it into the parent complex strip. The fixture reports five 15 × 6 mosaic images. The Holoviz raster transposes only the display axes, placing along-track `v` horizontally so the long strip fits a landscape window, and composites the source-branch on-image HUD.
 
-The parent strip is resident and full resolution, but it is not what `image_out` publishes. At the preset's 2.58 m spacing the parent is 40247 × 6029 `complex<double>`, 3.62 GiB a copy, and a Tensor pool holds sixteen slots of whatever rides the port — so republishing it would spend most of the card on reserve nobody reads, and at `lattice.pixel_scale: 2.5` it does not fit at all. The operator instead publishes the u-cropped parent decimated to twice `visualize_size` — 2683 × 360, 14.7 MiB — which is what both the display and `dump: true` receive.
+The parent strip is resident at full formation resolution, but `image_out`
+publishes a cropped, decimated view shared by display and `dump: true`.
+The application defaults to complex64 samples/images and float64 geometry;
+`sample_precision: double` selects complex128 samples/images.
 
-Decimating a strip means throwing away roughly 14 of every 15 samples on each axis, so the view is multi-looked rather than subsampled: each sample is the incoherent average of sixteen source samples spread across its box, carried as amplitude with zero phase. Subsampling speckle instead renders as static.
+At the preset's `lattice.pixel_scale: 1`, the recorded 40247 × 6029 parent
+requires about 1.81 GiB in complex64 or 3.62 GiB in complex128. Increasing
+`pixel_scale` to 2.5 increases the pixel count by about 6.25 times, giving
+approximately 11.3 GiB or 22.6 GiB for the parent alone. These payload sizes
+exclude Graph output pools, retained inputs, backprojection scratch, and other
+allocations; pool capacity depends on the compiled Graph and SDK configuration.
 
-Both the `SAR: image N formed` line and the on-image HUD report the strip's true size rather than the view's. Writing the accumulator out at full resolution is not implemented and remains an open item; at this spacing it would be a 24 GB file per image.
+The recorded 2683 × 360 published view requires about 7.37 MiB in complex64
+or 14.7 MiB in complex128. Decimated view samples are formed from an incoherent
+average of sixteen source samples spread across each box and carried as
+amplitude with zero phase. A view that needs no decimation preserves complex
+phase. The display and dump receive the same view; the decimated output is
+unsuitable for coherent phase analysis.
 
-`visualize: true` requests Holoviz when its HSDK 5 component and a usable
-X11 display are available. `headless: true` uses an offscreen CUDA sink.
-`visualize_size` bounds the display raster and, at twice its value, the
-mosaic's published view; it does not change formation resolution, which is
-`lattice.pixel_scale`. `visualize_hold_s` only keeps a finite positive duration after
-an emit; indefinite hold and interactive X11 validation remain open.
-`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
-and `output.max_files` to control its files.
+Both the `SAR: image N formed` line and the on-image HUD report the full
+strip dimensions rather than the view's dimensions. Full-resolution accumulator
+export is not implemented.
+
+`app.visualization.enabled: true` enables display; `headless: true` in
+that block selects offscreen rendering. `max_side` bounds the display raster
+without changing formation resolution. `final_image_hold_s` controls the
+interactive hold after completion: zero closes, a positive value holds for
+that many seconds, and a negative value waits for window closure or interruption.
+Headless and disabled-display runs do not hold. The former top-level
+`visualize`, `headless`, `visualize_size`, and `visualize_hold_s` keys remain
+aliases; see the [shared presentation controls](../../common/radar_app/viz/README.md#shared-presentation-controls).
+`dump: true` independently enables the synchronous `TensorDumpOp` branch;
+use `output.path` and `output.max_files` to control its files.
+
+For this workflow, twice `app.visualization.max_side` also bounds the
+mosaic view published to display and dumping. Formation resolution is controlled
+by `lattice.pixel_scale`.
 
 See [SAR data preparation](../tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),

@@ -99,18 +99,22 @@ the application requires the YAML collection list and rejects a single-CPHD over
 
 ## Output and display
 
-One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster with the active collection name on the on-image HUD. `SarImageReportOp` logs index, HxW, and the formed image's collect/wall/behind latched at backprojection emit. Scene names are still omitted from that log; see the [SAR open-items roll-up](../../../docs/ARCHITECTURE.md).
+One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster with the active collection name on the on-image HUD. `SarImageReportOp` logs index, HxW, and the formed image's collect/wall/behind latched at backprojection emit. Scene names are omitted from that log; identify collections by their configured order and the displayed name.
 
-`visualize: true` requests Holoviz when its HSDK 5 component and a usable
-X11 display are available. `headless: true` uses an offscreen CUDA sink.
-`visualize_size` bounds the display raster; it does not change formation
-resolution. The raster accepts the largest image extent derived from the full
-collection list, so later images may be larger than the first. The headless
-smoke includes a 1 × 1 image followed by an 8 × 8 image. `visualize_hold_s`
-only keeps a finite positive duration after
-an emit; indefinite hold and interactive X11 validation remain open.
-`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
-and `output.max_files` to control its files.
+`app.visualization.enabled: true` enables display; `headless: true` in
+that block selects offscreen rendering. `max_side` bounds the display raster
+without changing formation resolution. `final_image_hold_s` controls the
+interactive hold after completion: zero closes, a positive value holds for
+that many seconds, and a negative value waits for window closure or interruption.
+Headless and disabled-display runs do not hold. The former top-level
+`visualize`, `headless`, `visualize_size`, and `visualize_hold_s` keys remain
+aliases; see the [shared presentation controls](../../common/radar_app/viz/README.md#shared-presentation-controls).
+`dump: true` independently enables the synchronous `TensorDumpOp` branch;
+use `output.path` and `output.max_files` to control its files.
+
+The raster accepts the largest image extent derived from the full collection
+list, so later images may be larger than the first. The headless smoke includes
+a 1 × 1 image followed by an 8 × 8 image.
 
 See [SAR data preparation](../tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),

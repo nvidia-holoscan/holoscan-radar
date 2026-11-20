@@ -101,15 +101,18 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 ## Output and display
 
-Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster with the long along-track `v` axis horizontally and the source-branch on-image HUD. The formed mosaic and dump keep their `(v,u)` layout. The present visualization does not apply the YAML comment's proposed u-axis crop; this gap is tracked in the [SAR open-items roll-up](../../../docs/ARCHITECTURE.md).
+Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster with the long along-track `v` axis horizontally and the source-branch on-image HUD. The formed mosaic and dump keep their `(v,u)` layout. This workflow publishes the full parent mosaic; the derived u-axis display crop is not applied.
 
-`visualize: true` requests Holoviz when its HSDK 5 component and a usable
-X11 display are available. `headless: true` uses an offscreen CUDA sink.
-`visualize_size` bounds the display raster; it does not change formation
-resolution. `visualize_hold_s` only keeps a finite positive duration after
-an emit; indefinite hold and interactive X11 validation remain open.
-`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
-and `output.max_files` to control its files.
+`app.visualization.enabled: true` enables display; `headless: true` in
+that block selects offscreen rendering. `max_side` bounds the display raster
+without changing formation resolution. `final_image_hold_s` controls the
+interactive hold after completion: zero closes, a positive value holds for
+that many seconds, and a negative value waits for window closure or interruption.
+Headless and disabled-display runs do not hold. The former top-level
+`visualize`, `headless`, `visualize_size`, and `visualize_hold_s` keys remain
+aliases; see the [shared presentation controls](../../common/radar_app/viz/README.md#shared-presentation-controls).
+`dump: true` independently enables the synchronous `TensorDumpOp` branch;
+use `output.path` and `output.max_files` to control its files.
 
 See [SAR data preparation](../tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),

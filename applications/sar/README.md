@@ -107,27 +107,28 @@ The paced CPHD reader, range/manager, and backprojection run in separate
 partitions so collect-vs-wall lag is
 the live playback clock (TxTime versus now), not GPU time on the controller.
 Looping presets (`loop: true`) stop with Ctrl-C in the launch terminal; the
-shared Graph driver owns SIGINT/SIGTERM so host `holoscan run` does not need
-`docker kill`. One in-flight backprojection may finish before the process exits.
-When Holoviz is enabled, scene name, formed size, backprojection rate,
-last-pulse latency, and paced collect-vs-wall lag appear in a compact left status
-panel beside the docked timeline. The status follows its displayed image; the
-APC look chevron remains over the image. Status text is larger, and GUI
-throughput uses readable units such as `12.4 Gpx*pulse/s`; console measurements
-retain their original format. Separate-window or timeline-disabled
-layouts retain the on-image HUD. The timeline shows a
-20 s scrolling Gantt of collection dwells, image-emit ticks with last-pulse
-latency labels, and a 1 Hz lag HUD. Set
-`app.visualization.timeline.placement: window` for a separate timeline window.
-Collection names sit above their scrolling bars; these describe collection
-history rather than the image currently displayed. Interactive startup shows
-a distinct cached PREPARING canvas until the first image arrives. The timeline
-reports observed startup stage and elapsed time independently, without repeatedly
-rendering or downloading the main canvas.
-The timeline also shows received versus GPU-completed pulse counts toward the
-next image and an approximate remaining wall time. It honors playback pacing;
-until timing measurements are available it displays Estimating. The readout
-updates independently at 1 Hz, with progress advancing in completed GPU batches.
+C++ driver handles SIGINT/SIGTERM, while Python retains Python signal ownership;
+both stop and join native execution cooperatively. One in-flight backprojection may finish before the process exits.
+When visualization is enabled, a cached status panel describes the displayed
+image: collection name, formed dimensions, backprojection work, GPU processing
+latency and throughput. The sensor look annotation stays over the image.
+The docked timeline defaults to 112 pixels high and polls batch events at 10 Hz.
+Set `app.visualization.timeline.placement: window` for a separate timeline.
+
+Interactive startup shows a cached PREPARING canvas until the first formed
+image arrives. The progress panel reports observed checkpoints and unique
+received versus GPU-completed pulses toward the next image. Autofocus adds
+auxiliary formation, estimation and final-formation checkpoints. These are
+observed stages, not a heartbeat or estimated completion time.
+
+The history shows cyan `Pulse batch received` and green
+`Pulse batch processed` events on a 20-second axis ending at `Latest batch`.
+Connectors pair a batch's receipt with its observed GPU completion. History
+advances with batch events, while the progress readout refreshes at 1 Hz.
+Optional paced playback lag remains available. Timeline ticks do not render
+or download the cached main image. See the
+[shared visualization guide](../common/radar_app/viz/README.md#docked-sar-timeline)
+for display controls, event semantics and limits.
 
 The former `applications/sar_formation/` path and `sar_formation` executable
 were replaced by the five image-formation workflows above; autofocus adds
@@ -141,7 +142,11 @@ collections and [SDK development](../../DEVELOPER.md) for the pinned image.
 ## View saved images
 
 With `dump: true`, the app writes complex `.npy` products independently of the
-GUI. Convert a saved image to a PNG on the host from the repository root:
+GUI. The continuous-strip workflow instead dumps its published mosaic view;
+when that view is decimated, samples contain amplitude with zero phase.
+It does not export the full-resolution accumulator. See the
+[continuous-strip output contract](continuous_strip/README.md#output-and-display).
+Convert a saved image to a PNG on the host from the repository root:
 
 ```bash
 uv run applications/sar/tools/view_image.py path/to/image.npy
