@@ -127,7 +127,7 @@ std::vector<double> as_double(const HostTensor& t) {
   return out;
 }
 
-// The recovery acceptance number, from docs/planning/SAR/TESTING.md: "the
+// The recovery acceptance number, from docs/TESTING.md: "the
 // corrected product peak must reach >= 0.9 of the error-free peak". Every
 // assertion that a correction *worked* uses this.
 constexpr double kRecoveryFraction = 0.9;

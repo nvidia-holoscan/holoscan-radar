@@ -4,7 +4,7 @@
 // Phase-gradient autofocus stage behind AutofocusOp. CUDA-TU only
 // (includes <matx.h> via detail/matx_views.hpp).
 //
-// Algorithm (OPERATOR_API.md → AutofocusOp), on a (batch, n_range,
+// Algorithm (the operator README → AutofocusOp), on a (batch, n_range,
 // n_az) working cube whose last axis is the declared azimuth:
 //   1. Brightest scatterer per range bin; keep the brightest
 //      min_scatterers whose peak power is 10× the bin mean. Extra
@@ -29,7 +29,7 @@
 //   6. Accumulate accepted per-iteration corrections. The in-image
 //      apply uses that accumulator in the azimuth-FFT domain. The
 //      emitted phase_correction is its negation: a backprojected
-//      lattice (WORKFLOWS Figure 2) has an azimuth FFT conjugated
+//      lattice (the autofocus estimation/reformation path) has an azimuth FFT conjugated
 //      versus pulse history, and the port is pulse-indexed so
 //      PhaseCorrectionOp sense=subtract undoes the residual.
 //
@@ -538,7 +538,7 @@ __global__ void add_phase_kernel(T* acc, const T* iter, int64_t n) {
 // against a 4.75 rad baseline (no recovery at all, reported with a normal
 // sign) and 0.178 rad reversed. Measured against injected truth on Kourou over
 // a quadratic, a cubic, a sine and that 45-degree sinusoid, this mapping wins
-// on every one; see autofocus_op/OPEN_ITEMS.md.
+// on every one; see autofocus_op/README.md.
 //
 // Only the exported vector was affected. The in-image correction multiplies
 // bin k by phase_acc[k] in the spectrum domain and never consults this

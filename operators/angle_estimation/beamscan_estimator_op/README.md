@@ -19,6 +19,8 @@ SnapshotGatherOp.snapshot [+ is_valid] → BeamscanEstimatorOp
   → aoa_estimates [+ angle_spectrum] → FeatureAssemblyOp
 ```
 
+Declarations and parameter defaults: [beamscan_estimator_op.hpp](beamscan_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -50,9 +52,6 @@ SnapshotGatherOp.snapshot [+ is_valid] → BeamscanEstimatorOp
 | `el_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`; `[0]` gives a 1-D scan. Cost: Rebuilds weights. |
 | `array_taper` | `WindowSpec` | `kNone` (rectangular) | `[live]` Exact wire-schema override | Spatial amplitude taper; non-custom windows are separable on recognized filled URAs, while custom coefficients stay per-element. Cost: Rebuilds weights. |
 | `peak_interpolation` | `PeakInterpolation` | `none` | `[live]` Exact | `none` = argmax cell; `parabolic` = quadratic refinement (2-D interior peaks only). Cost: Free — no weight rebuild. |
-
-Contract: [`OPERATOR_API.md` § `BeamscanEstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md)
 
 ## Algorithm
 

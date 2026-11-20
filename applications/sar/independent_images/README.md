@@ -99,7 +99,7 @@ the application requires the YAML collection list and rejects a single-CPHD over
 
 ## Output and display
 
-One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster with the active collection name on the on-image HUD. `SarImageReportOp` logs index, HxW, and the formed image's collect/wall/behind latched at backprojection emit. Scene names are still omitted from that log; see the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
+One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster with the active collection name on the on-image HUD. `SarImageReportOp` logs index, HxW, and the formed image's collect/wall/behind latched at backprojection emit. Scene names are still omitted from that log; see the [SAR open-items roll-up](../../../docs/ARCHITECTURE.md).
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.
@@ -112,10 +112,10 @@ an emit; indefinite hold and interactive X11 validation remain open.
 `dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
 and `output.max_files` to control its files.
 
-See [SAR data preparation](../../../applications/sar/tools/README.md),
+See [SAR data preparation](../tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
-[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).
+[shared architecture](../../../docs/ARCHITECTURE.md).
 
 ## Python graph
 

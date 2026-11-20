@@ -24,7 +24,7 @@
 #include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 
-// Phase gradient autofocus on a conjugate-grid image (OPERATOR_API.md →
+// Phase gradient autofocus on a conjugate-grid image (the operator README →
 // AutofocusOp). Estimates a residual phase along the azimuth-conjugate axis
 // and applies it in-image; the per-pulse estimate is published separately so
 // it can correct a formation on any geometry through PhaseCorrectionOp (D20).

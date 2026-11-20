@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tiled strip demo: tiled strip of Imperial Valley Capella stripmap
-# (INPUT_DATA.md). Same collect as continuous strip; tiled strip steps geometry
+# (applications/sar/tools/README.md). Same collect as continuous strip; tiled strip steps geometry
 # and resets (seams), a parent mosaic holds finished squares so
 # Holoviz is the strip, not the last chip. Pull first (~3.45 GiB);
 # the app never reaches the network.

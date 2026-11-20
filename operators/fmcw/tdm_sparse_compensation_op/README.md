@@ -18,6 +18,8 @@ Use after CFAR on uncompensated TDM maps to gather, phase-correct, and assemble 
 rd_maps + detection_idx + optional fold_idx -> TDMSparseCompensationOp -> snapshot + geometry -> angle estimator
 ```
 
+Declarations and parameter defaults: [tdm_sparse_compensation_op.hpp](tdm_sparse_compensation_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -51,8 +53,6 @@ rd_maps + detection_idx + optional fold_idx -> TDMSparseCompensationOp -> snapsh
 | `snapshot_window` | `vector<int64_t>` | `{0,0}` | `[live]` Exact | Doppler/range half-extents. |
 | `doppler_edge` | `SnapshotEdgeMode` | `wrap` | static | Doppler edge policy. |
 | `range_edge` | `SnapshotEdgeMode` | `shift` | static | Range edge policy. |
-
-Contract: [`OPERATOR_API.md` section `TDMSparseCompensationOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 

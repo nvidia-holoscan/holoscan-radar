@@ -19,6 +19,8 @@ Use after `SnapshotGatherOp` when closely spaced sources must be resolved and a 
   → SnapshotGatherOp → snapshot → MUSICEstimatorOp → aoa_estimates
 ```
 
+Declarations and parameter defaults: [music_estimator_op.hpp](music_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -58,9 +60,6 @@ Use after `SnapshotGatherOp` when closely spaced sources must be resolved and a 
 | `max_sources` | int64 | `4` | `[live]` Exact | `doa_multi` / EFT `K_max`; MUSIC targets `min(d_i, max_sources)` peaks Cost: Reallocates `doa_multi`; implementation cap `64`. |
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis sub-array **counts** `[P]` / `[P_az, P_el]` on a filled ULA/URA Cost: Rebuilds plan + index H2D; warns once. |
 | `forward_backward` | bool | `true` | static | Conjugate-reversed looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
-
-Contract: [`OPERATOR_API.md` § `MUSICEstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
 
 ## Algorithm
 

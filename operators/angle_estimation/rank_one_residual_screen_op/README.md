@@ -20,6 +20,8 @@ snapshot + baseline_aoa [+ is_valid] [+ live array_geometry]
   → snapshot_out + selected_idx [+ diagnostics]
 ```
 
+Declarations and parameter defaults: [rank_one_residual_screen_op.hpp](rank_one_residual_screen_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -48,8 +50,6 @@ snapshot + baseline_aoa [+ is_valid] [+ live array_geometry]
 | `array_geometry` | `ArrayGeometry` | none (required unless every tick supplies a live value) | `[live]` Exact wire override | Positions and wavelength for the snapshot channel axis. |
 | `angle_convention` | `AngleConvention` | `radar_boresight` | static | Boundary convention used by `baseline_aoa`. |
 | `residual_threshold` | double | `0.10` | static | Select finite scores greater than or equal to this value; constrained to `[0, 1]`. |
-
-Contract: [`OPERATOR_API.md` § `RankOneResidualScreenOp`](../../../docs/planning/OPERATOR_API.md) · group: [`operators/angle_estimation/README.md`](../README.md)
 
 ## Algorithm
 

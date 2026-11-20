@@ -18,6 +18,8 @@ Use between range compression and the Doppler FFT for SISO, SIMO, or deinterleav
 FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
 ```
 
+Declarations and parameter defaults: [clutter_filter_op.hpp](clutter_filter_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -41,9 +43,6 @@ FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
 | `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `method` | `ClutterFilterMethod` {`none`, `mean_subtraction`, `single_delay`, `double_delay`} | `mean_subtraction` | `[live]` Exact | Slow-time clutter suppression or materialized pass-through Cost: Shape-changing when a delay canceller is selected. |
 | `doppler_window` | `WindowSpec` | `none` | `[live]` Exact via wire schema | Weighting for `mean_subtraction`; ignored by other methods Cost: Unseen windows rebuild and cache taps, warning once. |
-
-Contract: [`OPERATOR_API.md` § `ClutterFilterOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 

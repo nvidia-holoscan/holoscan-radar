@@ -7,7 +7,7 @@ without pipeline-specific glue between processing stages.
 Holoscan Radar targets HSDK 5. The Holoscan CLI pulls the public GA SDK image
 `nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13` when needed; the
 devcontainer uses the same image. Setup and Python provider requirements are
-documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+documented in [SDK setup](DEVELOPER.md).
 
 ## Quick start
 
@@ -50,7 +50,7 @@ parameters. Precision is fixed per instance (`float` or `double`), and GPU
 execution is required.
 
 Shared descriptors and tensor conventions are documented in
-[`operators/common/README.md`](operators/common/README.md). The FMCW operator API reference is [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md); the current HSDK 5 SAR contract is [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md).
+[`operators/common/README.md`](operators/common/README.md). Public headers and schemas define declarations and defaults; operator READMEs define behavior. Shared rules are in [architecture](docs/ARCHITECTURE.md).
 
 ## Example applications
 
@@ -93,7 +93,7 @@ To run a Python application:
 ```
 
 The Python provider is optional in ordinary C++ builds; see
-[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) for SDK components and packaging.
+[SDK setup](DEVELOPER.md) for SDK components and packaging.
 It exposes all 33 public operators through 68 native registrations under
 `holoscan.radar` and thirteen Python Graph workflows through
 `holoscan_radar.applications`: seven FMCW and six SAR. See the
@@ -108,8 +108,8 @@ guide covers host-side lint.
 
 - [`DEVELOPER.md`](DEVELOPER.md): build, test, lint, and contribution workflow
 - [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309): deferred product, algorithm, performance, and tooling work
-- [`docs/planning/WORKFLOWS.md`](docs/planning/WORKFLOWS.md): supported radar chains and port wiring
-- [`docs/planning/TESTING.md`](docs/planning/TESTING.md): test strategy and analytic ground truth
+- [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md): supported radar chains and port wiring
+- [`docs/TESTING.md`](docs/TESTING.md): test strategy and analytic ground truth
 
 ## License
 

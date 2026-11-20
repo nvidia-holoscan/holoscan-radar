@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Continuous strip demo: continuous strip of Imperial Valley Capella
-# stripmap (INPUT_DATA.md). Same collect as tiled strip; continuous strip
+# stripmap (applications/sar/tools/README.md). Same collect as tiled strip; continuous strip
 # translates the lattice along v and scrolls the accumulator
 # (no tile seams, no cross-range taper). Pull first (~3.45 GiB);
 # the app never reaches the network.

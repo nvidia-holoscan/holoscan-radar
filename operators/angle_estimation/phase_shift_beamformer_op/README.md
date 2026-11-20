@@ -19,6 +19,8 @@ rd_maps → PhaseShiftBeamformerOp → rda_cube → CFARDetectorOp.rd_maps
                               └──→ az_grid / el_grid → FeatureAssemblyOp
 ```
 
+Declarations and parameter defaults: [phase_shift_beamformer_op.hpp](phase_shift_beamformer_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -48,9 +50,6 @@ rd_maps → PhaseShiftBeamformerOp → rda_cube → CFARDetectorOp.rd_maps
 | `az_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine`. Cost: Rebuilds weights. |
 | `el_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`. Cost: Rebuilds weights. |
 | `array_taper` | `WindowSpec` | `WindowType::kNone` (rectangular) | `[live]` Exact wire-schema override | Amplitude taper across elements. Cost: Rebuilds weights. |
-
-Contract: [`OPERATOR_API.md` § `PhaseShiftBeamformerOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md)
 
 ## Algorithm
 

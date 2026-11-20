@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# WORKFLOWS Figure 2 on Hartsfield-Jackson Atlanta -- one of the
+# the autofocus estimation/reformation path on Hartsfield-Jackson Atlanta -- one of the
 # scene-axis configs for operators/sar/autofocus_op/tools/sweep.py, which is the
 # only place PGA accuracy can be measured (CI fixtures are 5-pulse
 # generated CPHDs, far too small). The sweep's scene axis exists
-# because every accuracy number in OPEN_ITEMS.md through 2026-10-30
+# because every accuracy number in operator README accuracy notes through 2026-10-30
 # came from Kourou alone, and Kourou was *screened* for PGA: an
 # isolated corner reflector lit across the whole dwell. A result
 # that only holds on a screened scene is not a result about the

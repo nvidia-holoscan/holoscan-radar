@@ -67,7 +67,7 @@ class MIMODeinterleaveOp : public holoscan::Operator<MIMODeinterleaveParams> {
 
   Input<Tensor> adc_cube{"adc_cube"};
   // HSDK 5 requires unique port names within an operator (inputs and
-  // outputs share one namespace). OPERATOR_API.md's logical output channel
+  // outputs share one namespace). the operator README's logical output channel
   // remains "adc_cube"; the physical port name is adc_cube_out.
   //  revisit naming once the full port is settled.
   Output<Tensor> adc_cube_out{"adc_cube_out"};

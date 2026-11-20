@@ -100,7 +100,7 @@ bool is_cuda_accessible(const holoscan::Tensor& tensor);
 // Throw std::invalid_argument (naming the operator and the port) unless the
 // tensor is CUDA-accessible. Module-wide input requirement: pageable-host
 // input is rejected; ingest operators upload before the processing chain
-// (STATUS.md decision 2026-07-10).
+// (the required CUDA-accessible input rule).
 void require_cuda_accessible(const holoscan::Tensor& tensor, const char* port_name,
                              const std::string& who);
 

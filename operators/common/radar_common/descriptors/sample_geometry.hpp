@@ -23,7 +23,7 @@ struct SampleGeometrySpec {
   // image reference point, so its sidecar reaches this field by backing off
   // (counts / 2) * spacing along each axis and forcing both counts odd, which
   // is what puts the reference point on a pixel centre rather than between
-  // four (tools/sar_sim/sar_sim/truth.py → suggested_sample_geometry). A
+  // four (the analytic simulator sample-geometry builder). A
   // centre handed straight to this field offsets the whole image by half its
   // extent.
   std::array<double, 3> origin{};

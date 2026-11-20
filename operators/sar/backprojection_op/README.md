@@ -11,7 +11,9 @@ Accumulate complex SAR images from weighted range profiles and 3-D pulse geometr
 
 ## When to use
 
-Use after aperture management to form a monostatic image on a SampleGeometry lattice or explicit sample points. Reset geometry gives independent images; scroll geometry retains overlapping image rows as the window advances. Choose a backend statically and provide the first fast-time sample frequency.
+Use after aperture management to form a monostatic image on a SampleGeometry lattice or explicit sample points. Reset geometry gives independent images; scroll geometry retains overlapping image rows as the window advances. Choose a backend statically and provide the phase-reference frequency matching range compression.
+
+Declarations and parameter defaults: [backprojection_op.hpp](backprojection_op.hpp). Behavioral requirements are documented below.
 
 ## Ports
 
@@ -63,7 +65,7 @@ Set `max_pulses`, `max_range_bins`, `max_image_v`, and `max_image_u` for the lar
 | `sample_geometry` | `SampleGeometry` | required for lattice | [live] | Image grid |
 | `range_bin_spacing` | `optional<double>` | unset | [live] | Differential-range bin spacing |
 | `range_bin_origin` | `optional<double>` | unset | [live] | Differential-range first bin |
-| `reference_frequency` | `double` | required positive | [live] | First fast-time sample frequency |
+| `reference_frequency` | `double` | required positive | [live] | Phase-reference frequency matching range compression |
 | `interpolation` | `RangeInterpolation` | linear | [live] | Range lookup method |
 | `backend` | `BackprojectionBackend` | NVRadar LUT vector | Static | CUDA arithmetic strategy |
 | `geometry_change` | `GeometryChange` | reset | Static | Reset or scroll lattice |
@@ -76,9 +78,7 @@ centre to sample point relative to the pulse reference point, finds the
 corresponding range bin, linearly interpolates its complex value, applies
 `reference_frequency` phase and optional pulse `weight`, and accumulates.
 Positions and sample points must share the declared Cartesian frame and
-metre units. `reference_frequency` is the **first fast-time sample frequency**
-for this range convention; the SAR apps derive it from CPHD `SC0`/`SCSS`
-for their chosen range-compression setup.
+metre units. `reference_frequency` is the frequency rotated to IFFT DC by range compression: **stored sample `floor(num_samples / 2)`** for the supplied FX path. The SAR apps derive it as `SC0 + floor(num_samples / 2) * SCSS`, matching the range stage. The unrotated first-sample SC0 convention is not interchangeable with it.
 
 `control` drives image emission and reset/continuation. An unwired or missing
 control means the stage accumulates without emitting; stopping with pending
@@ -110,7 +110,7 @@ rejected. The operator validates positive reference frequency and range
 spacing, uniform `range_bins`, matching pulse/position axes, sample-points
 shape `(num_v,num_u,3)`, and image bounds. A missing geometry or CUDA stream
 is an error. Numerical backend and radiometric parity questions remain in
-the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
+the [qualification notes](#remaining-qualification-and-contract-questions).
 
 ## Use and verification
 
@@ -124,4 +124,12 @@ An app must also provide `sample_geometry` or sample points, range spacing
 (or uniform `range_bins`), and a positive reference frequency. The C++ tests
 compare analytic point targets and exercise reset, scroll, backend selection,
 control values, and invalid axes. See the
-[SAR operator contract](../../../docs/planning/SAR/OPERATOR_API.md).
+[shared architecture](../../../docs/ARCHITECTURE.md).
+
+## Remaining qualification and contract questions
+
+NVRadar-derived kernels retain an unresolved OSRB disposition obligation. Their source is NVRadar `bp_kernels.py` at SHA `37c1cb29355bcfe256ae728f51dd47071847d949`. All backend names being dispatched does not establish numerical parity: qualify precision, even-length origin/phase, and real-data focus for each selected NVRadar/MatX variant. The z0 backend is for planar scenes. Do not compensate origin differences with an ad hoc R0 or profile shift.
+
+Explicit-points mode is remembered on first matching `sample_points` arrival rather than inferred from wiring; a missing first sample can therefore select lattice mode. A scroll tick missing its live lattice falls back to the original Params lattice and can request an invalid backward scroll. Whether a scrolling miss should mean no change requires contract review; this cleanup does not change Exact/SafeDefault semantics. Publish the current lattice for each tick.
+
+The public image is rank 2 and named axes admit no opaque batch. Historical internal per-batch accumulator code remains; it is not a supported multi-image API. Review that unreachable path before removing it or proposing collection batching. The old R11 discussion is available at Git revision `6c261de7c153daa0c8a6be9d6829b149cfbdf41c`, path `operators/sar/backprojection_op/OPEN_ITEMS.md`. `initial_image`, nearest/sinc interpolation and `matx_taylor_fast` remain declared but rejected as documented above.

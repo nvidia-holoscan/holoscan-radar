@@ -817,7 +817,7 @@ void RootMUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
   spec.input(is_valid).optional().queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(aoa_estimates)
       .produces_tensor(pooled_tensor_output(kDevice, kMaxRank, aoa_max_byte_span_));
-  // Optional in OPERATOR_API.md — always emitted so unwired consumers do not
+  // Optional in the operator README — always emitted so unwired consumers do not
   // need Connectivity gating; no angle_spectrum (gridless).
   spec.output(doa_multi).produces_tensor(
       pooled_tensor_output(kDevice, kMaxRank, doa_max_byte_span_));

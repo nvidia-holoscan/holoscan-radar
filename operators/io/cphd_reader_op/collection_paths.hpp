@@ -12,7 +12,7 @@
 
 #include "radar_common/sdk/config_codecs.hpp"
 
-// The `path` parameter of the standard-format readers, which OPERATOR_API.md
+// The `path` parameter of the standard-format readers, which the operator README
 // defines as "a single CPHD file, a directory of them, or an explicit ordered
 // list". Two of those three are written as a YAML scalar and the third as a
 // sequence, and no built-in parameter type accepts both: the codec for

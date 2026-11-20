@@ -20,6 +20,8 @@ labels + detection_idx + points
                          → reduced_points (optional)
 ```
 
+Declarations and parameter defaults: [detection_reduction_op.hpp](detection_reduction_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -48,9 +50,6 @@ labels + detection_idx + points
 | `score_method` | enum {weighted_sum, weighted_l2, weighted_max, custom} | `weighted_sum` | `[live]` Exact | Peak score or weighted-mean row-weight collapse Cost: Free. |
 | `feature_weights` | float64 vector, length `num_features` | none | `[live]` Exact host config Tensor | Peak collapse, medoid scaling, or weighted-mean row weights; empty means uniform mean only for `weighted_mean` Cost: H2D when used. |
 | `score_fn` | compile-time device functor | none (`NoCustomScore`) | static (template argument) | `T operator()(const T* row, int64_t num_features) const`; only when `score_method = custom` |
-
-Contract: [`OPERATOR_API.md` § `DetectionReductionOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/detection/README.md`](../README.md)
 
 ## Algorithm
 

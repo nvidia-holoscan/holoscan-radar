@@ -101,7 +101,7 @@ ClusterDBSCANParams make_params(std::vector<double> epsilon, int64_t min_points 
 // port, which also skips the per-cluster histogram that runs solely to fill
 // it — the earlier histogram feeding label renumbering must survive, so this
 // checks the labels stay correct on every later tick.
-// See OPERATOR_API.md, "Optional output convention".
+// See the operator README, "Optional output convention".
 TEST(ClusterDBSCANOpTest, UnwiredSizesDoesNotFailTheRunOrDisturbLabels) {
   constexpr std::size_t kFrames = 8;
   const std::vector<double> pts = {

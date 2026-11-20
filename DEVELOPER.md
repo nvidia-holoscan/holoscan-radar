@@ -84,8 +84,8 @@ python3.12 -m venv .venv
 The development Dockerfile installs the same groups. Run the following
 commands from the **host** at the repository root. The wrapper prefers the
 pinned CLI in `.venv` without requiring activation; the CLI performs the build,
-run, and test work in containers. Authenticate to NGC as described in
-[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md), then use the commands below. The CLI
+run, and test work in containers. See the [SDK setup section](#sdk-development-image)
+for the configured GA image, then use the commands below. The CLI
 builds the project image when needed and tags it from the project and branch.
 `./holoscan-radar build-container` prepares the image separately when you
 want to inspect or reuse it before building an app; it is not a prerequisite.
@@ -275,7 +275,7 @@ For individual SAR build gates use `-DBUILD_ALL=OFF -DAPP_spotlight=ON`
 (or `APP_video_sar`, `APP_tiled_strip`, `APP_continuous_strip`,
 `APP_independent_images`). See the [SAR app index](applications/sar/README.md)
 for mode-specific graphs, [data preparation](applications/sar/tools/README.md) for
-optional public collections, and the [HSDK 5 SAR contract](docs/planning/SAR/OPERATOR_API.md).
+optional public collections, and the [SAR operator index](operators/sar/README.md).
 The fixture is generated in C++; C++ applications do not require the Python
 provider. The five formation GUI apps have been visually checked with their
 current presets. That check does not establish full-resolution image quality
@@ -487,3 +487,128 @@ keep these dependencies private.
 Debian packages containing CPHD declare a tinyxml2 dependency.
 For TGZ archives, install it yourself; see the
 [archive prerequisites](pkg/holoscan-radar/README.md#consuming-the-installed-c-package).
+
+## SDK development image
+
+Holoscan Radar builds against the public HSDK 5 GA image
+`nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13`. This replaces the
+pre-release staging image; access to `nvstaging` is no longer required.
+
+The image was verified on an NVIDIA GB10 host as Linux `arm64` with digest
+`sha256:faa23a3a2479697fd64babcb27d28cf97f21d5da54d65c92225f8a9b0d99264a`.
+Its CMake package is at `/usr/lib/cmake/holoscan`, including the visualization
+and testing components.
+
+Use the SDK `main-5x` source branch when an API is not yet documented, but
+build against the GA image.
+
+## Prepare the image
+
+From the repository root on the host, install the CLI as described in
+[`DEVELOPER.md`](DEVELOPER.md#holoscan-cli). You can pull the SDK image directly:
+
+```bash
+docker pull nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13
+```
+
+The CLI pulls the GA base image when needed. You can build the project
+image separately with `./holoscan-radar build-container`; the run, build, and
+test commands also build it when needed. The devcontainer uses the same base
+image. Rebuild and reopen it when switching SDK images.
+
+Run the repository's `./holoscan-radar` wrapper **on the host**. It selects
+the GA base image and uses the CLI installed in `.venv` when available.
+Each command below starts a container to do its work. If a
+sibling `../holoscan-sdk` checkout exists, the CLI still mounts it; the
+wrapper selects the image SDK for nested builds.
+
+```bash
+./holoscan-radar build holoscan-radar --language cpp
+./holoscan-radar run siso --language cpp --run-args=siso_smoke.yaml
+./holoscan-radar test
+```
+
+Run `./holoscan-radar run-container` on the host to open a shell for direct
+CMake or CTest work; those commands then run inside the container. See the
+[interactive workflow](DEVELOPER.md#inside-a-development-container). The CLI
+selects Python when both app languages exist and `--language` is omitted. It
+tags images from the project and branch automatically. Do not pass `--local` to
+the host commands: that flag runs the build or application on the host instead
+of in the container. Start with a clean `build/<app>` tree when switching SDK
+images so CMake does not retain old paths.
+
+## Python provider
+
+The GA image installs HSDK 5 Python Core and Visualization under
+`/usr/lib/python3.12/site-packages`. Radar's FMCW/SAR provider uses nanobind and
+does not require the SDK's former pybind11 CMake target. The development image
+installs nanobind 3.0.1. `./holoscan-radar test` enables the provider and its
+`pytest_provider` CTest entry by default. For a C++-only test run, pass
+`--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`. Direct CMake builds still
+default to Python off; enable them with `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON`.
+
+```bash
+./holoscan-radar test
+./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
+```
+
+The provider covers all 33 public operators: 26 FMCW operators with F32/F64
+variants; `SARRangeCompressionOp`, `PhaseCorrectionOp`, and `AutofocusOp` with
+F32/F64 variants; and `CPHDReaderOp`, `ApertureManagerOp`, and `BackprojectionOp`
+with `F32GeomF32`, `F32GeomF64`, and `F64GeomF64` variants. `TensorDumpOp` is a
+single dtype-independent sink without an `extents` argument. Existing FMCW
+imports and call signatures are unchanged.
+
+All six SAR applications also have Python graphs with the same YAML,
+visualization, dumping, and playback behavior as C++. They default to single
+samples with double geometry; `sample_precision: double` selects double for
+both. Python owns its signal handlers and polls interrupts while native
+execution releases the GIL; SIGINT/SIGTERM stop and join the session before
+propagating `KeyboardInterrupt`. The C++ drivers own SIGINT/SIGTERM handlers and poll a lock-free stop flag
+from their control loops, then request cooperative session shutdown. They use
+caller-managed `run_async(plan)`, so profiler-created startup threads do not
+conflict with HSDK managed-signal admission. Window closure and Escape request
+graph shutdown directly. In-flight GPU work must finish before cleanup returns.
+
+For an operator trace, run the built executable inside the development container:
+
+```bash
+nsys profile --trace=cuda,nvtx --sample=none --backtrace=none --cpuctxsw=none \
+  -o /tmp/siso-profile build/holoscan-radar/applications/fmcw/siso/cpp/siso \
+  build/holoscan-radar/applications/fmcw/siso/cpp/siso_smoke.yaml
+```
+
+Use a fresh output name and the actual generated preset path for your build.
+No profiling-specific application flag or signal-mask changes are required.
+
+Python `[live]` enum inputs remain unavailable because the SDK cannot register
+those port payloads; the corresponding C++ contracts are unchanged.
+
+## When the SDK image changes
+
+Update the image reference in the root `Dockerfile`,
+`.devcontainer/devcontainer.json`, `holoscan-radar` wrapper, and this guide together. Confirm the new
+image's architecture, `holoscan_DIR`, visualization and testing components, and
+Python Core and Visualization packages. Then rebuild the development image and
+run the build, CTest, and application smoke checks described in `DEVELOPER.md`.
+
+## Implementing and reviewing operators
+
+Keep the Holoscan shell thin and math in a reusable stage. Infer named axes each tick, validate dtype/layout/extents before touching memory, and honor the compute stream. Hold input/descriptor ownership until asynchronous use completes. Separate cold plan/window/manifold/calibration work from steady compute. Reuse bounded scratch; do not allocate dense buffers every tick or do host walks over device data. Gate optional work, cache expensive configurations within the instance byte budget, and preserve warn-on-rebuild behavior.
+
+Before landing, synchronize public headers, parameter schemas/defaults, wire schemas and conversion, owner README tables/behavior, build/install/export metadata, and Python bindings. Cover the supported precision combinations, live misses/revisits, invalid inputs, optional outputs, output lifetimes, and independent analytic predictions described in [testing requirements](docs/TESTING.md). Review temporal publication order before changing `contract()` or any sibling output ordering. No benchmark gate is required.
+
+Support needed by distributed operators belongs in library packaging; checkout diagnostics stay beside their owners and outside packages. CFAR calibration remains available through its existing C++ and Python APIs. Use the existing module CMake helpers and package metadata; do not introduce a parallel packaging framework.
+
+## Pinned lint workflow
+
+On the host, after `uv sync`, install the lint dependencies into `.venv` and activate it so metadata validation imports the pinned CLI:
+
+```bash
+uv pip install --python .venv/bin/python -r utilities/requirements.lint.txt
+source .venv/bin/activate
+pre-commit run --files <changed-files>
+pre-commit run --all-files
+```
+
+Use the pinned pre-commit hooks, not system formatter versions. Run applicable hooks before committing and the complete suite before handoff/push. Re-stage formatter changes. New code/CMake/YAML/Docker files need the two-line NVIDIA SPDX header. clang-format 18.1.8 owns C++ layout (100 columns); include each directly named standard-library type. Markdown lines including table rows are limited to 800 characters, fences need languages, and table delimiter rows use padded pipes.

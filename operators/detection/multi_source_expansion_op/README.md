@@ -21,6 +21,8 @@ selected_idx + resolved_aoa + doa_multi + source_count
   → detection_idx_out + aoa_estimates_out
 ```
 
+Declarations and parameter defaults: [multi_source_expansion_op.hpp](multi_source_expansion_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -46,8 +48,6 @@ selected_idx + resolved_aoa + doa_multi + source_count
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
 | None | — | — | — | This operator has no Params; behavior is set by constructor captures and inputs. |
-
-Contract: [`OPERATOR_API.md` § `MultiSourceExpansionOp`](../../../docs/planning/OPERATOR_API.md) · group: [`operators/detection/README.md`](../README.md)
 
 ## Expansion algorithm
 

@@ -18,6 +18,8 @@ Use after TDM deinterleave plus range/Doppler processing when the complete dense
 ... -> FMCWDopplerProcessorOp -> TDMDenseCompensationOp -> VirtualArrayAssemblyOp
 ```
 
+Declarations and parameter defaults: [tdm_dense_compensation_op.hpp](tdm_dense_compensation_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -40,8 +42,6 @@ Use after TDM deinterleave plus range/Doppler processing when the complete dense
 | `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `waveform` | `FMCWWaveformDescriptor` | none (required) | `[live]` Exact wire-schema override | Per-TX PRI for Doppler-dependent correction. |
 | `tx_schedule` | `TXSchedule` | empty identity round-robin | static | Maps TX identity to firing slot; must be uniform and match `M_tx`. |
-
-Contract: [`OPERATOR_API.md` section `TDMDenseCompensationOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 

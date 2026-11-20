@@ -107,7 +107,7 @@ class SubarraySelectionOp : public holoscan::Operator<SubarraySelectionParams> {
   // Keep prior activation inputs alive while asynchronous copies/gathers read.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  // Independent optional/latched outputs (OPERATOR_API.md).
+  // Independent optional/latched outputs (the operator README).
   LatchedOutput array_geometry_out_;
   LatchedOutput is_valid_out_;
   std::shared_ptr<detail::SubarraySelectionState> state_;

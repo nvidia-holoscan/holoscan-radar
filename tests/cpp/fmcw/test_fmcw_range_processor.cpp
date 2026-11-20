@@ -263,7 +263,7 @@ TEST(FMCWRangeProcessorOpTest, NoRangeBinsWithoutWaveform) {
 // would fail the activation and take range_profiles down with it, which is
 // what this pins: an undrained range_bins costs one warning, not the run.
 // NoRangeBinsWithoutWaveform is the companion where no waveform means nothing
-// is emitted at all. See OPERATOR_API.md, "Optional output convention".
+// is emitted at all. See the operator README, "Optional output convention".
 TEST(FMCWRangeProcessorOpTest, UndrainedRangeBinsDoesNotFailTheRun) {
   const sim::SimWaveform waveform{};
   const auto result = sim::simulate(make_scene(range_at_bin(30.0)));

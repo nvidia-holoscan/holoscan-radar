@@ -13,6 +13,8 @@ Window and inverse-transform CPHD phase history into centered differential-range
 
 Use after CPHD ingress or any producer of frequency-domain SAR phase history. The inverse transform, leading ifftshift, and output fftshift preserve the centred range convention needed by backprojection; a waveform supplies the optional physical range axis.
 
+Declarations and parameter defaults: [sar_range_compression_op.hpp](sar_range_compression_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 `T=float` means complex64/float32; `T=double` means complex128/float64.
@@ -90,5 +92,11 @@ range_compression:
 Applications may pass an app-derived `nfft` at graph construction. The C++
 range-compression tests compare impulse and analytic point-target responses,
 FFT shift, padding, and axis spacing. See the
-[SAR operator contract](../../../docs/planning/SAR/OPERATOR_API.md) for the
-locked port definitions and `OPEN_ITEMS.md` for the radiometric-default review.
+[shared architecture](../../../docs/ARCHITECTURE.md) for the
+shared rules; the qualification notes below cover the radiometric-default review.
+
+## Qualification and costly configurations
+
+`fft_norm: backward` is the implemented default; the radiometrically preferred default remains a product question. Preserve it until reviewed with amplitude-qualified data. The frequency-domain range step uses `bandwidth / (num_samples - 1)`; recheck CPHD FxBand/SCSS spacing against a real off-centre target rather than changing it from an on-axis image alone.
+
+Unseen FFT lengths can incur cuFFT planning and cold CUDA JIT cost, especially prime lengths. Padding to a fast composite length can be cheaper than a minimally sufficient prime. Instance cache eviction can make revisits expensive; the shared byte budget now owns retained shape scratch, superseding historical fixed-slot descriptions. Range-axis construction and staging remain separate work; a device cache must not reuse a published buffer while downstream retains it. The waveform changes axis arithmetic rather than dechirp coefficients here. `range_window_out` is a per-tick causal descriptor, published before the profiles that drive its consumer; historical publish-on-change notes do not describe this implementation.

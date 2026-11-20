@@ -352,7 +352,7 @@ inline void run_beamscan_multilook_stage(const cuda::std::complex<T>* snapshots,
 
 // Blank AOA / spectrum for items with no valid snapshot slots (K_i == 0).
 // `mask` is (num_items, num_snapshots) uint8/bool; nullptr is a no-op.
-// Matches OPERATOR_API.md: estimators restrict to marked slots; empty items
+// Matches the operator README: estimators restrict to marked slots; empty items
 // must not report a DOA from garbage covariance / beamforming.
 template <typename T>
 __global__ void blank_empty_beamscan_items_kernel(const unsigned char* __restrict__ mask,

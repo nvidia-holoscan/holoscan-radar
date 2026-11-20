@@ -19,6 +19,8 @@ rd_maps / rda_cube / power_map -> CFARDetectorOp
   -> detection_idx + detection_score + noise_estimate [ + detection_mask ]
 ```
 
+Declarations and parameter defaults: [cfar_detector_op.hpp](cfar_detector_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -66,9 +68,6 @@ rd_maps / rda_cube / power_map -> CFARDetectorOp
 | `max_detections` | int64 | `0` (uncapped) | `[live]` Exact | `> 0` caps `detection_idx` rows and warns on surplus Cost: Free (cap after count). |
 | `peak_mode` | enum {none, range_doppler, all} | `none` | static | Raw detections, per-plane RD maxima, or full N-D maxima Cost: NMS launch unless none. |
 | `peak_radius` | int64 vector | `[1]` | static | NMS half-width: scalar or RD pair for `range_doppler`; scalar or post-NCI-rank vector for `all`; zero excludes an axis Cost: Grows neighborhood traversal multiplicatively. |
-
-Contract: [`OPERATOR_API.md` § `CFARDetectorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/detection/README.md`](../README.md)
 
 ## Algorithm
 

@@ -13,6 +13,8 @@ Apply a per-pulse phase correction to every range bin of that pulse.
 
 Use when a phase estimator supplies a pulse-aligned correction before image formation. The sense parameter must explicitly choose add or subtract so the sign is visible at the graph boundary. Input and output names differ because HSDK 5 requires unique port names.
 
+Declarations and parameter defaults: [phase_correction_op.hpp](phase_correction_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 The two required inputs join with `Exact{}` at the same capture time. `T=float`
@@ -67,4 +69,4 @@ Connect a pulse-aligned phase estimator upstream and the corrected profiles
 to a subsequent formation graph. None of the five shipped SAR apps currently
 uses this optional autofocus bridge. The C++ tests assert both sign choices
 against an analytic phase rotation and check shape errors. See the
-[SAR operator contract](../../../docs/planning/SAR/OPERATOR_API.md).
+[shared architecture](../../../docs/ARCHITECTURE.md).

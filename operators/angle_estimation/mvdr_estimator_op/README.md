@@ -19,6 +19,8 @@ Use after `SnapshotGatherOp` when adaptive null placement and interference rejec
   → SnapshotGatherOp → snapshot → MVDREstimatorOp → aoa_estimates
 ```
 
+Declarations and parameter defaults: [mvdr_estimator_op.hpp](mvdr_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -56,9 +58,6 @@ Use after `SnapshotGatherOp` when adaptive null placement and interference rejec
 | `max_sources` | int64 | `1` | `[live]` Exact | Capon peaks to report (`aoa_estimates` is always the strongest) Cost: Reallocates `doa_multi`; cap `64`. |
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis sub-array **counts** on a filled ULA/URA Cost: Rebuilds plan + index H2D; warns once. |
 | `forward_backward` | bool | `true` | static | Conjugate-reversed looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
-
-Contract: [`OPERATOR_API.md` § `MVDREstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
 
 ## Algorithm
 

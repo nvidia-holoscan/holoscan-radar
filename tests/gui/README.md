@@ -266,4 +266,4 @@ separate. `ShutdownSignals.*` covers delivery on a thread that predates handler
 installation, unchanged signal masks, prior-disposition restoration, and
 exclusive ownership. The applications use caller-managed HSDK sessions so
 Nsight helper threads do not violate managed-signal admission. See
-[SDK_DEVELOPMENT.md](../../SDK_DEVELOPMENT.md) for a profiling invocation.
+[SDK setup](../../DEVELOPER.md) for a profiling invocation.

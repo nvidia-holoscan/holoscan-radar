@@ -41,7 +41,7 @@ struct ClutterStageState {
   ConfigCache<CachedWindow<T>> windows;
 };
 
-// Output chirp count for a method, per the locked contract. kNone passes
+// Output chirp count for a method, per the documented behavior. kNone passes
 // through unchanged.
 inline int64_t clutter_num_chirps_out(ClutterFilterMethod method, int64_t num_chirps) {
   switch (method) {
@@ -64,7 +64,7 @@ inline int64_t clutter_num_chirps_out(ClutterFilterMethod method, int64_t num_ch
 // the split ClutterFilterOp (materialized below) and the fused operator's
 // Doppler pre-FFT expression.
 //
-// Methods (per the locked contract):
+// Methods (per the documented behavior):
 //   kMeanSubtraction — subtract the per-(batch, range-bin) slow-time mean.
 //   kSingleDelay     — first difference  x[k+1] - x[k]        (1st-order MTI)
 //   kDoubleDelay     — x[k] - 2 x[k+1] + x[k+2]               (2nd-order MTI)

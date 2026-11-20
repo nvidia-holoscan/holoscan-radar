@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Video SAR demo: video SAR of downtown Houston (INPUT_DATA.md).
+# Video SAR demo: video SAR of downtown Houston (applications/sar/tools/README.md).
 # Full 23.5 s dwell at ~1.0 m ground-range GSD. Sliding window:
 # retain ~0.92 s of pulses (1.0 m azimuth), emit every 4096
 # pulses (~2.18 Hz at PRF 8942 Hz; four 1024-pulse reader

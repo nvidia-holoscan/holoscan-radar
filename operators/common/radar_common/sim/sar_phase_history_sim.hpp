@@ -23,8 +23,8 @@
 //
 // with f_k the transmit frequency of sample k.
 //
-// **The sign is a convention, and it is the convention.** It is the same one
-// tools/sar_sim/sar_sim/signal.py writes, paired with `Global/SGN = -1` in the
+// **The sign is a convention, and it is the convention.** It is paired
+// with `Global/SGN = -1` in the
 // CPHD XML: an *inverse* transform along the frequency axis (the exp(+2 pi i)
 // kernel, numpy's ifft and MatX's ifft) puts a target at positive dR at a
 // positive delay, and so at a range bin above centre. SARRangeCompressionOp

@@ -13,6 +13,8 @@ Manage pulse membership, retention, emit cadence and collection-boundary flush.
 
 Use between range compression and backprojection when apertures span ticks or need a typed boundary flush. Retained video frames use signed weights for evictions; independent images reset on each collection. It owns pulse history and emits control, not an image.
 
+Declarations and parameter defaults: [aperture_manager_op.hpp](aperture_manager_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 `T=float` means complex64/float32; `T=double` means complex128/float64.
@@ -119,4 +121,10 @@ The C++ tests cover partial final batches, collection and EOS boundaries,
 retention, explicit evictions, signed weights, and reset/reform behavior.
 A generated 20-pulse video app smoke exercises retention beyond the upstream
 Tensor-pool depth and checks five emitted images.
-The locked contract is [SAR OPERATOR_API.md](../../../docs/planning/SAR/OPERATOR_API.md).
+Shared rules are in [architecture](../../../docs/ARCHITECTURE.md).
+
+## Remaining validation and implementation limits
+
+Image-level reform equivalence against direct formation and more boundary-preservation tests through splitting/coalescing stages remain useful qualification work. Historical metadata-disabled cases must be recast for the required typed `stream_boundary` input; this operator no longer reads a string metadata key.
+
+Constructor checks require pulse/range bounds, while setup also dereferences image extents for `sample_points_out`; callers must supply both image bounds. Scalar control/evict reads check shape and byte size but do not fully validate dtype, and the optional points path lacks the geometry dtype check used for positions. Supply the declared dtypes; these validation gaps remain follow-up work. The cadence counter resets inside the active `control_out` branch; with that output unwired the continuing-mode internal counter is not reset on cadence. This does not affect the supplied graphs, which wire control. Preserve these behaviors pending a focused fix and tests.

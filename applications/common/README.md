@@ -51,3 +51,11 @@ Generic document decoding and validation live under `app/`.
 Application entrypoints include one workflow facade rather than another
 application's files. Shared helpers therefore flow inward through
 `radar_app`; applications never include one another.
+
+## SAR configuration and lifecycle boundaries
+
+All six SAR graphs have C++ and Python entry points with shared YAML, presentation, dumping and playback semantics. Samples default to single with double geometry; `sample_precision: double` opts into double samples. Native graphs keep source/ingest, application and formation partitions distinct; do not attribute scheduling independence solely to default thread-placement bindings. `SAR_DUMP_PLAN` can inspect compiled placement.
+
+C++ owns SIGINT/SIGTERM handlers and polls a lock-free stop flag from caller-managed asynchronous sessions. Python retains Python signal ownership, releases the GIL for native work, polls interrupts, then stops and joins before propagating interruption. Window closure and Escape request graph shutdown. GPU work already in flight must finish before cleanup returns. End-of-stream display retention is driven by `app.visualization.final_image_hold_s`: positive holds for that duration, zero closes with the graph, negative holds until closure/interruption. This is implemented; historical claims that negative hold is unsupported are stale.
+
+The app still stores `sidecar_path` and `collection_physics` after configuration derivation, and parses `nvradar_vph_path` without applying an external VPH file. Removing those fields is separate cleanup. Strip crop fields are derived but not applied by the current visualization path. Full-resolution focus, radiometry and seam qualification across real collections remains open; generated fixture smokes and visual preset reviews establish narrower evidence.

@@ -18,6 +18,8 @@ Use when range compression, optional clutter suppression, and Doppler processing
 adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 ```
 
+Declarations and parameter defaults: [fmcw_range_doppler_processor_op.hpp](fmcw_range_doppler_processor_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -58,9 +60,6 @@ adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 | `propagation_speed` | float64 | `299792458.0` m/s | Params-only | Beat → range Cost: Free (device fill of `range_bins` only). |
 | `nfft_range` | int64 | `0` (= `samples_per_chirp`) | `[live]` Exact | Range FFT length Cost: Unseen length builds a range FFT plan, warning once. |
 | `nfft_doppler` | int64 | `0` (= post-clutter chirp count) | `[live]` Exact | Doppler FFT length Cost: Unseen length builds a Doppler FFT plan, warning once. |
-
-Contract: [`OPERATOR_API.md` § `FMCWRangeDopplerProcessorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md) ·
 
 ## Algorithm
 

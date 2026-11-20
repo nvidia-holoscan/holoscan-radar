@@ -20,6 +20,8 @@ CFARDetectorOp.detection_idx (+ detection_score) → FeatureAssemblyOp → point
 ⟨scan-grid tensor source⟩.az_grid / el_grid → FeatureAssemblyOp  (dense RDA; tokens az / el)
 ```
 
+Declarations and parameter defaults: [feature_assembly_op.hpp](feature_assembly_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -46,9 +48,6 @@ CFARDetectorOp.detection_idx (+ detection_score) → FeatureAssemblyOp → point
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
 | None | — | — | — | This operator has no Params; behavior is set by constructor captures and inputs. |
-
-Contract: [`OPERATOR_API.md` § `FeatureAssemblyOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/detection/README.md`](../README.md)
 
 ## Feature reference
 

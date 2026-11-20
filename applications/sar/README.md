@@ -2,10 +2,9 @@
 
 The six HSDK 5 C++ and Python SAR workflows share the CPHD reader, range compression,
 aperture manager, and backprojection operators. Five are image-formation workflows; the
-sixth, autofocus, adds the opt-in phase gradient autofocus chain (WORKFLOWS
-Figure 2) over a retained, replayed aperture. Each executable
+sixth, autofocus, adds the opt-in phase gradient autofocus estimation/reformation chain over a retained, replayed aperture. Each executable
 owns its graph wiring, config validation, build gate, YAML, metadata, and
-fixture smoke. See the [workflow guide](../../docs/planning/SAR/WORKFLOWS.md)
+fixture smoke. See the [workflow guide](../../docs/WORKFLOWS.md)
 for the named image-formation workflows and their relationships. Shared Graph driving, geometry conversion, reporting, mosaics,
 and CUDA visualization live in `applications/common/radar_app/sar/`.
 
@@ -71,7 +70,7 @@ Public SAR operators use mapping parameters, matching their YAML spelling.
 selects `F64GeomF64`. Other SAR operators expose F32/F64 factories.
 `TensorDumpOp(graph, name, path=...)` accepts any tensor dtype and takes no
 pool extents. Python live enum ports retain the
-[documented SDK limitation](../../SDK_DEVELOPMENT.md#python-provider).
+[documented SDK limitation](../../DEVELOPER.md).
 
 The provider suite compares complex C++/Python fixture products in both sample
 precisions, covers retention and geometry changes, exercises the autofocus
@@ -89,7 +88,7 @@ of image quality on a real collection. For targeted SAR CTest commands inside
 a development container, see the individual app guides.
 
 The shipped YAML files are **real-data presets**. Download or subset the CPHD
-files in the host `data/sar/` directory using [optional data preparation tools](../../applications/sar/tools/README.md),
+files in the host `data/sar/` directory using [optional data preparation tools](tools/README.md),
 then run through the Holoscan CLI or directly inside the DevContainer. Relative
 CPHD paths first use an existing caller-relative or YAML-relative file, then
 runtime `HOLOHUB_DATA_DIR`, then the data directory compiled into the application
@@ -99,14 +98,13 @@ download-and-run command block. Read each app guide for
 the exact collection, geometry, output, and display prerequisites. The
 [CPHD reader](../../operators/io/cphd_reader_op/README.md) and
 [SAR operator references](../../operators/sar/README.md) describe the library
-contracts. The [current HSDK 5 SAR contract](../../docs/planning/SAR/OPERATOR_API.md)
-takes precedence over older planning material.
+contracts. Public headers/schemas own declarations and defaults; [architecture](../../docs/ARCHITECTURE.md) covers shared rules.
 
 Visualization is best-effort: if rendering falls behind, both SAR display
 connections discard older frames and show newer images. Formation, image
 reporting, and optional tensor dumping keep their normal delivery policy.
 The paced CPHD reader, range/manager, and backprojection run in separate
-partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is
+partitions so collect-vs-wall lag is
 the live playback clock (TxTime versus now), not GPU time on the controller.
 Looping presets (`loop: true`) stop with Ctrl-C in the launch terminal; the
 shared Graph driver owns SIGINT/SIGTERM so host `holoscan run` does not need
@@ -136,9 +134,9 @@ were replaced by the five image-formation workflows above; autofocus adds
 a separate workflow. There is no compatibility launcher.
 The host `./holoscan-radar test` command includes generated CPHD smokes and
 headless visualization. The CPHD fixture is generated once by C++.
-See the [SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) for
-tracked follow-ups and [SAR input data](../../docs/planning/SAR/INPUT_DATA.md) for optional real
-collections and [SDK development](../../SDK_DEVELOPMENT.md) for the pinned image.
+See the [SAR operator guides](../../operators/sar/README.md) for
+owner-local limitations and [SAR input data](tools/README.md) for optional real
+collections and [SDK development](../../DEVELOPER.md) for the pinned image.
 
 ## View saved images
 
@@ -152,7 +150,7 @@ uv run applications/sar/tools/view_image.py path/to/image.npy
 The PNG is written beside the input; no display is needed. `uv` supplies the
 optional plotting dependencies. Add `--show` for interactive viewing or use
 `clean.npy corrected.npy --compare` for panels sharing one intensity scale.
-The [viewer guide](../../applications/sar/tools/README.md#view-saved-images) describes
+The [viewer guide](tools/README.md#view-saved-images) describes
 range settings and array orientation. Save logs within the checkout print the
 viewer command for the actual image filename.
 

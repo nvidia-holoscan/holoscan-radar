@@ -131,7 +131,7 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Output<Tensor> snapshot{"snapshot"};
   Output<Tensor> is_valid{"is_valid"};
   // [live] Exact override of params().snapshot_window; the entry is
-  // unconditional and wiring the port enables it (OPERATOR_API.md).
+  // unconditional and wiring the port enables it (the operator README).
   // Fixed-layout port payload; see SnapshotWindowOverride.
   // Edge modes are static Params only (no live ports).
   Input<SnapshotWindowOverride> snapshot_window{"snapshot_window"};

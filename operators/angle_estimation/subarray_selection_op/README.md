@@ -21,6 +21,8 @@ SnapshotGatherOp.snapshot [+ is_valid]
     (or MVDREstimatorOp / MUSICEstimatorOp with spatial_smoothing)
 ```
 
+Declarations and parameter defaults: [subarray_selection_op.hpp](subarray_selection_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -47,9 +49,6 @@ SnapshotGatherOp.snapshot [+ is_valid]
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override on `array_geometry_in` | Holey virtual positions + wavelength. `num_elements` must match `snapshot` channels. Cost: Rebuilds the host plan and H2D channel-index table; logs INFO once per new key. |
 | `subarray` | `std::vector<int64_t>` | `{}` (auto) | `[live]` Exact host config Tensor, extent bounded by `max_subarray_channels` | Explicit channel indices; empty → largest filled ULA/URA. Re-emitted in lattice order. Cost: Same rebuild. |
 | `min_subarray_size` | int64 | `2` | static | Auto (and explicit) selection errors below this many channels. Cost: Rebuilds the plan (part of the cache key). |
-
-Contract: [`OPERATOR_API.md` § `SubarraySelectionOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md)
 
 ## Algorithm
 

@@ -49,7 +49,7 @@ namespace holoscan::radar {
 //                       Selected input rows for member policies; synthetic
 //                       weighted feature means for weighted_mean.
 //
-// Parameters (OPERATOR_API.md [live] tags):
+// Parameters (the operator README [live] tags):
 //   representative  — enum {peak, medoid, first, weighted_mean}. [live] Exact
 //                     Input.
 //   score_method    — enum {weighted_sum, weighted_l2, weighted_max, custom}.
@@ -108,7 +108,7 @@ class DetectionReductionOp : public holoscan::Operator<DetectionReductionParams>
   Output<Tensor> rep_idx{"rep_idx"};
   Output<Tensor> reduced_points{"reduced_points"};
   // [live] Exact overrides; the entries are unconditional and wiring the port
-  // enables it (OPERATOR_API.md).
+  // enables it (the operator README).
   Input<RepresentativePolicy> representative{"representative"};
   Input<ScoreMethod> score_method{"score_method"};
   Input<Tensor> feature_weights{"feature_weights"};

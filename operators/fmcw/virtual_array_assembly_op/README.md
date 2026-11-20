@@ -18,6 +18,8 @@ Use after dense TDM compensation or dense DDM demultiplexing to flatten TX/RX ma
 … → TDMDenseCompensationOp / DDMDenseDemultiplexOp → VirtualArrayAssemblyOp → CFARDetectorOp / SnapshotGatherOp / ⟨angle op⟩
 ```
 
+Declarations and parameter defaults: [virtual_array_assembly_op.hpp](virtual_array_assembly_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -42,9 +44,6 @@ Use after dense TDM compensation or dense DDM demultiplexing to flatten TX/RX ma
 | `rx_positions` | float vector, row-major `(num_rx, 3)` | none (required) | static (Params-only) | RX element positions (m). Length must match `N_rx` Cost: Same as `tx_positions`. |
 | `wavelength` | float | none (required) | `[live]` Exact | Operating wavelength (m) for emitted geometry (`c / carrier_frequency`) Cost: Free for the gather; wire geometry metadata is rewritten each tick. |
 | `overlap_policy` | enum `{dedup, average, keep_all}` | `dedup` | static (Params-only) | Coincident `p_virtual` handling; sets `num_virtual` Cost: Rebuilds the plan (gather vs average kernel). |
-
-Contract: [`OPERATOR_API.md` § `VirtualArrayAssemblyOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 

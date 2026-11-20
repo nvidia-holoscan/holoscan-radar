@@ -18,6 +18,8 @@ Use at the front of a uniform TDM-MIMO chain to convert the packed slow-time chi
 adc_cube → MIMODeinterleaveOp → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → TDMDenseCompensationOp → VirtualArrayAssemblyOp
 ```
 
+Declarations and parameter defaults: [mimo_deinterleave_op.hpp](mimo_deinterleave_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -37,9 +39,6 @@ adc_cube → MIMODeinterleaveOp → FMCWRangeProcessorOp → [ClutterFilterOp] �
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
 | `tx_schedule` | `TXSchedule` | none (required) | static (Params-only) | TDM firing pattern. Carries `num_tx`; optional `tx_order` (length M, default round-robin) or `chirp_tx_index` (length `M·L`, overrides `tx_order`). `L` is inferred as `(M·L)/num_tx`, not a separate parameter Cost: Changing it (not a `[live]` port) rebuilds the gather map: host expand + async H2D into the ctor-sized table. Same `(slow_time, schedule)` is a cache hit. |
-
-Contract: [`OPERATOR_API.md` § `MIMODeinterleaveOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 
@@ -61,9 +60,9 @@ So output slot `(tx, l)` gathers from interleaved slow-time index `k`. Built on 
 
 **Row copy.** One CUDA block per output row `(tx, rx, l)` cooperatively copies the contiguous `samples` vector. Input layout is `(N_rx, slow_time, samples)`; output layout is `(M_tx, N_rx, L, samples)` with channel-major `(tx, rx)` ordering. The innermost `samples` axis is copied 1:1. Element size selects a 4-, 8-, or 16-byte word copy (`uint32_t` / `uint64_t` / `uint4`) so complex64, complex128, float32, and float64 all take the same path.
 
-**PRI is not applied here.** This operator does not read `FMCWWaveformDescriptor`. The caller must set `waveform.chirp_repetition_interval` on downstream operators to the **per-TX effective PRI** (`M ×` the physical inter-chirp spacing). See `TXSchedule` notes in `OPERATOR_API.md` and `applications/fmcw/mimo_tdm` for the simulator split between physical vs effective PRI.
+**PRI is not applied here.** This operator does not read `FMCWWaveformDescriptor`. The caller must set `waveform.chirp_repetition_interval` on downstream operators to the **per-TX effective PRI** (`M ×` the physical inter-chirp spacing). See the [MIMO TDM application](../../../applications/fmcw/mimo_tdm/README.md) for the simulator split between physical vs effective PRI.
 
-TDM only. There is no DDM path — DDM has no slow-time interleave (`WORKFLOWS.md`).
+TDM only. There is no DDM path — DDM has no slow-time interleave (see the [workflow guide](../../../docs/WORKFLOWS.md)).
 
 ## Shape and dtype rules
 

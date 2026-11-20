@@ -56,7 +56,7 @@ enum class ArrayGeometryType {
   kConformal,
 };
 
-// AngleConvention preset (see OPERATOR_API.md Supporting data structures).
+// AngleConvention preset (see the operator README Supporting data structures).
 enum class AngleConventionPreset {
   kRadarBoresight,
   kRosRep103,
@@ -215,7 +215,7 @@ enum class AutofocusAzimuthAxis {
 // AutofocusOp.termination: why the refinement loop stopped, emitted as
 // int32 on the port of that name. Provenance, not quality -- it says
 // what the operator did, never whether the estimate is right (see
-// autofocus_op/OPEN_ITEMS.md, which measures three candidate quality
+// autofocus_op/README.md, which measures three candidate quality
 // signals and falsifies all three). Three of these mean the image was
 // returned untouched, and before this port existed they were
 // indistinguishable from success on every wired port: all three emit a

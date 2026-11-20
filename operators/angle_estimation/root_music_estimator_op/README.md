@@ -19,6 +19,8 @@ Use after `SnapshotGatherOp` for gridless multi-source estimation on a uniform l
   → SnapshotGatherOp → snapshot → RootMUSICEstimatorOp → aoa_estimates
 ```
 
+Declarations and parameter defaults: [root_music_estimator_op.hpp](root_music_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -53,9 +55,6 @@ Use after `SnapshotGatherOp` for gridless multi-source estimation on a uniform l
 | `max_sources` | int64 | `4` | `[live]` Exact | Capacity and EFT `K_max` Cost: Reallocates `doa_multi`; cap `64`. |
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis counts on a filled ULA/URA Cost: Rebuilds plan + H2D; changes polynomial degree. |
 | `forward_backward` | bool | `true` | static | FB looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
-
-Contract: [`OPERATOR_API.md` § `RootMUSICEstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
 
 ## Algorithm
 
@@ -101,7 +100,7 @@ a_c = exp(j · (iy · k·dy · u + iz · k·dz · v)),   c = iz·ny + iy
 dir = u · y_axis + v · z_axis + sqrt(max(0, 1−u²−v²)) · normal
 ```
 
-There is no canonical single-polynomial 2-D Root-MUSIC; this reduced-dimension + pairing method is the documented `OPERATOR_API.md` design. Joint 2-D polynomials and explicit non-ULA per-axis subarray specifications are not supported.
+There is no canonical single-polynomial 2-D Root-MUSIC; this reduced-dimension + pairing method is the reduced-dimension design documented here. Joint 2-D polynomials and explicit non-ULA per-axis subarray specifications are not supported.
 
 **Spatial smoothing** is the same S1 front-end as MUSIC (per-axis counts, optional forward-backward). Changing an already-built plan logs:
 

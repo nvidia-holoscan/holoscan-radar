@@ -18,6 +18,8 @@ Use before `CFARDetectorOp` in detect-before-demultiplex DDM with a linear integ
 pre-demux rd_maps -> DDMPowerFoldOp -> CFARDetectorOp -> DDMSparseDemultiplexOp
 ```
 
+Declarations and parameter defaults: [ddm_power_fold_op.hpp](ddm_power_fold_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -38,8 +40,6 @@ pre-demux rd_maps -> DDMPowerFoldOp -> CFARDetectorOp -> DDMSparseDemultiplexOp
 | --- | --- | --- | --- | --- |
 | `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `ddm_code` | `DDMCodeDescriptor` | none (required) | static | Defines linear integer-bin TX bands and discarded guards. |
-
-Contract: [`OPERATOR_API.md` section `DDMPowerFoldOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 

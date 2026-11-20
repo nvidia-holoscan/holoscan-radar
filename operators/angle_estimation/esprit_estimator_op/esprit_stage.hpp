@@ -139,7 +139,7 @@ __device__ bool esprit_qr_eigenvalues(cuda::std::complex<T>* matrix, cuda::std::
 // eigenvectors (they commute), so the unitary Schur basis Z that triangulizes
 // Psi_y (Z^H Psi_y Z upper-triangular) simultaneously triangulizes Psi_z; the
 // paired diagonals diag(Z^H Psi_y Z) and diag(Z^H Psi_z Z) give the
-// automatically-paired azimuth/elevation eigenvalues. See OPERATOR_API.md.
+// automatically-paired azimuth/elevation eigenvalues. See the operator README.
 // ---------------------------------------------------------------------------
 
 // Es_ref^H Es_ref -> gram (d x d) and Es_ref^H Es_shift -> cross (d x d), where

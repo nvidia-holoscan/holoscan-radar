@@ -40,7 +40,7 @@ template <typename T>
 struct RootMUSICRuntimeState;
 
 // Gridless Root-MUSIC sparse-path DOA estimator. Contract reference:
-// docs/planning/OPERATOR_API.md → "RootMUSICEstimatorOp".
+// operators/angle_estimation/root_music_estimator_op/README.md.
 //
 // Covariance / Hermitian eig / fixed-or-EFT source count / noise-subspace
 // projector match MUSICEstimatorOp. On a ULA, Root-MUSIC roots the
@@ -54,7 +54,7 @@ struct RootMUSICRuntimeState;
 //                       mask before its snapshot.
 // Out: aoa_estimates  — float32/float64, (num_items, 2). Always emitted.
 // Out: doa_multi      — float32/float64, (num_items, max_sources, 2).
-//                       Always emitted (optional in OPERATOR_API.md).
+//                       Always emitted (optional in the operator README).
 // Out: source_count   — int32, (num_items,). Always emitted.
 // Out: eigenvalues    — float32/float64,
 //                       (num_items, post-smoothing num_channels). Always
@@ -122,7 +122,7 @@ class RootMUSICEstimatorOp : public holoscan::Operator<RootMUSICParams> {
   Output<Tensor> doa_multi{"doa_multi"};
   Output<Tensor> source_count{"source_count"};
   Output<Tensor> eigenvalues{"eigenvalues"};
-  // [live] Exact overrides (OPERATOR_API.md).
+  // [live] Exact overrides (the operator README).
   Input<WireArrayGeometry> array_geometry{"array_geometry"};
   Input<SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
   Input<int64_t> num_sources{"num_sources"};

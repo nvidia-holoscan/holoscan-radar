@@ -101,7 +101,7 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 ## Output and display
 
-Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster with the long along-track `v` axis horizontally and the source-branch on-image HUD. The formed mosaic and dump keep their `(v,u)` layout. The present visualization does not apply the YAML comment's proposed u-axis crop; this gap is tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
+Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster with the long along-track `v` axis horizontally and the source-branch on-image HUD. The formed mosaic and dump keep their `(v,u)` layout. The present visualization does not apply the YAML comment's proposed u-axis crop; this gap is tracked in the [SAR open-items roll-up](../../../docs/ARCHITECTURE.md).
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.
@@ -111,10 +111,10 @@ an emit; indefinite hold and interactive X11 validation remain open.
 `dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
 and `output.max_files` to control its files.
 
-See [SAR data preparation](../../../applications/sar/tools/README.md),
+See [SAR data preparation](../tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
-[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).
+[shared architecture](../../../docs/ARCHITECTURE.md).
 
 ## Python graph
 

@@ -58,7 +58,7 @@ inline int64_t compression_num_bins(int64_t num_samples, const std::optional<int
 // bandwidth is the span from the first sample's frequency to the last one's,
 // so N samples divide it into N-1 steps. That is what CPHD's `FxBand` against
 // per-vector `SC0` / `SCSS` describes, and what the in-repo simulator
-// (`tools/sar_sim/sar_sim/signal.py` → `frequency_axis`) generates. The two
+// (`radar_common/sim/sar_phase_history_sim.hpp`) generates. The two
 // spellings differ by one part in N, which is a range-scale error that a
 // single-target test at the reference range cannot see -- so the axis test
 // places a target away from centre.
@@ -107,7 +107,7 @@ inline double range_bin_spacing(const RangeCompressionConfig& cfg, int64_t num_s
 //   warn_on_rebuild — true when this tick's config came from an override that
 //              differs from the previous effective config.
 //
-// Steps, per the locked contract: window along fast-time, ifftshift so
+// Steps, per the documented behavior: window along fast-time, ifftshift so
 // stored sample N/2 is IFFT DC, zero-pad the middle of the rotated row
 // when nfft > num_samples, inverse-transform under cfg.fft_norm, and
 // fftshift the range axis so zero differential range lands at bin

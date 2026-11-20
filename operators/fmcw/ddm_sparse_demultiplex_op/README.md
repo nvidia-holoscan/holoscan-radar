@@ -18,6 +18,8 @@ Use after `DDMPowerFoldOp` and CFAR when only detected DDM cells need TX separat
 rd_maps + folded detections [+ fold_idx] -> DDMSparseDemultiplexOp -> snapshot + geometry
 ```
 
+Declarations and parameter defaults: [ddm_sparse_demultiplex_op.hpp](ddm_sparse_demultiplex_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -51,8 +53,6 @@ rd_maps + folded detections [+ fold_idx] -> DDMSparseDemultiplexOp -> snapshot +
 | `snapshot_window` | `vector<int64_t>` | `{0,0}` | `[live]` Exact | Folded-surface half-extents. |
 | `doppler_edge` | `SnapshotEdgeMode` | `wrap` | static | Folded-Doppler edge policy. |
 | `range_edge` | `SnapshotEdgeMode` | `shift` | static | Range edge policy. |
-
-Contract: [`OPERATOR_API.md` section `DDMSparseDemultiplexOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
 
 ## Algorithm
 

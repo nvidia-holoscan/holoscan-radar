@@ -84,13 +84,13 @@ class VirtualArrayAssemblyOp : public holoscan::Operator<VirtualArrayAssemblyPar
 
   Input<Tensor> rd_maps{"rd_maps"};
   // HSDK 5 requires unique port names within an operator (inputs and
-  // outputs share one namespace). OPERATOR_API.md's logical output channel
+  // outputs share one namespace). the operator README's logical output channel
   // remains "rd_maps"; the physical port name is rd_maps_out.
   //  revisit naming once the full port is settled.
   Output<Tensor> rd_maps_out{"rd_maps_out"};
   Output<WireArrayGeometry> array_geometry{"array_geometry"};
 
-  // [live] Exact override (OPERATOR_API.md).
+  // [live] Exact override (the operator README).
   Input<double> wavelength{"wavelength"};
 
  private:

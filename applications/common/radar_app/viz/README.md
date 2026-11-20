@@ -709,3 +709,9 @@ flush deferred inputs. No tensor copy or additional GPU wait is introduced.
 FMCW builds without the optional HoloViz package disable effective visualization
 before graph construction, regardless of YAML display or hold settings. Their
 processing graph runs normally without a display drain or final-window hold.
+
+## SAR presentation and progress
+
+SAR uses the shared dashboard configuration and presenter selection, with the formed image, docked timeline/status and progress rather than an independent visualization policy. The active scene name, H×W, pulse progress, BP rate, latency and paced lag derive from bounded host diagnostics. Optional `FormationHud` captures do not alter tensor contracts or formation results. A fixed CUDA-event ring uses nonblocking queries; missing history suppresses progress/ETA instead of delaying formation. Headless and visualization-disabled apps do not enable that tracking.
+
+The timeline distinguishes input/ingest from output/formation history and reports collect-versus-wall lag for paced playback. Status can show a completed autofocus refusal distinctly from accepted iterations, but cannot claim phase accuracy from convergence. Image panels preserve matching plot diagonals, typography, time bookends and final frames through shutdown. Presenter configuration, remembered choices, X11 transport and device boundaries follow the existing shared application policy. Close/Escape requests cooperative shutdown; finite/indefinite final-image holds are handled by the graph driver, so a raster must not block its own presentation partition waiting for a hold.

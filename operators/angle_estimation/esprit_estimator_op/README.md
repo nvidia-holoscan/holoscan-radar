@@ -19,6 +19,8 @@ Use after `SnapshotGatherOp` when a ULA, filled URA, or explicit shift-invariant
   → SnapshotGatherOp → snapshot → ESPRITEstimatorOp → aoa_estimates
 ```
 
+Declarations and parameter defaults: [esprit_estimator_op.hpp](esprit_estimator_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -54,9 +56,6 @@ Use after `SnapshotGatherOp` when a ULA, filled URA, or explicit shift-invariant
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis counts; exclusive with explicit `subarray_spec` Cost: Rebuilds plan + re-derives auto pairs. |
 | `forward_backward` | bool | `true` | static | FB looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
 | `subarray_spec` | `ShiftInvariantSubarrayPair` | auto (empty vectors) | static (Params only) | Explicit corresponding indices, or auto ULA/URA pairs Cost: Rebuilds index H2D. |
-
-Contract: [`OPERATOR_API.md` § `ESPRITEstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/angle_estimation/README.md`](../README.md) ·
 
 ## Algorithm
 

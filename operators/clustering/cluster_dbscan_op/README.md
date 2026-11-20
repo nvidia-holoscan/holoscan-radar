@@ -18,6 +18,8 @@ Use after `FeatureAssemblyOp` when detections should be grouped by density in a 
 FeatureAssemblyOp.points → ClusterDBSCANOp → labels (+ sizes) → DetectionReductionOp
 ```
 
+Declarations and parameter defaults: [cluster_dbscan_op.hpp](cluster_dbscan_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -43,9 +45,6 @@ FeatureAssemblyOp.points → ClusterDBSCANOp → labels (+ sizes) → DetectionR
 | `epsilon` | float64 vector, length `1` or `num_features` | none (required) | `[live]` Exact host config Tensor | Neighborhood radius; per-axis zero ignores a feature; `[0.5]` is isotropic Cost: H2D of `1/ε²` or zero on a new `(epsilon, num_features)` key. |
 | `min_points` | int64 | `0` → `2 · active_features` | `[live]` Exact | DBSCAN `minPts` (neighbors including self) Cost: Free (core threshold). |
 | `max_clusters` | int64 | `0` (uncapped) | `[live]` Exact | Keep the largest `max_clusters`; warn once on overflow Cost: Free (relabel surplus to noise). |
-
-Contract: [`OPERATOR_API.md` § `ClusterDBSCANOp`](../../../docs/planning/OPERATOR_API.md) ·
-group: [`operators/clustering/README.md`](../README.md)
 
 ## Algorithm
 

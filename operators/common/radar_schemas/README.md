@@ -13,6 +13,6 @@ Each root table declares a four-byte `file_identifier` required by current
 HSDK 5 traits generation: `RAGY` (`ArrayGeometry`), `RWSP` (`WindowSpec`),
 `RWFV` (`FMCWWaveform`).
 
-See [`SCHEMA_PAYLOADS.md`](../../../docs/planning/SCHEMA_PAYLOADS.md) for the
+See [schema payload policy](../../../docs/ARCHITECTURE.md) for the
 generator checklist, compatibility rules, Tensor bounds, zero-length optional
 array convention, test obligations, and C++/Python support boundary.

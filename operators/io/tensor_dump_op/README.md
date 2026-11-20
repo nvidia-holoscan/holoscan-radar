@@ -13,6 +13,8 @@ Write an arbitrary device tensor to a NumPy or raw file for diagnosis.
 
 Use this sink to inspect an intermediate tensor or formed image during development. It copies device data to host and writes synchronously; use every_n or max_files to limit file cost. It is deliberately untemplated because it accepts any dtype.
 
+Declarations and parameter defaults: [tensor_dump_op.hpp](tensor_dump_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
@@ -78,4 +80,8 @@ tensor_dump:
 The standalone SAR applications expose an app-level `dump: true` toggle and
 `output` settings; see their guides for the actual wiring. The C++ tests
 check NumPy headers, bytes, tick throttling, output limits, and invalid
-inputs. The public contract is [SAR OPERATOR_API.md](../../../docs/planning/SAR/OPERATOR_API.md).
+inputs. The public contract is [architecture](../../../docs/ARCHITECTURE.md).
+
+## Behavior and qualification notes
+
+This sink is intentionally untemplated: it preserves the incoming tensor's dtype rather than computing a new precision. Whether a future API should template sinks remains a product question. File writes and device-to-host staging are synchronous costs; do not assume dumping is free. `{index}` counts input ticks, not saved files, so `every_n` leaves gaps. A path without `{index}` warns and overwrites according to the existing policy. Unsupported NumPy dtypes fail for `npy`; raw output preserves bytes. Inputs still require CUDA-accessible storage; pageable-host input is not a fallback path.

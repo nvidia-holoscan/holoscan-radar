@@ -530,7 +530,7 @@ TEST(AutofocusOp, NarrowWindowCostsSwingAndStaysInsideTheTarget) {
 // error that is not a pure quadratic, or the oversampled polar auxiliary).
 // That is why the bounds below are tight. They cannot catch the real-data
 // defect -- only the collect can, and the recipe for it is in
-// `operators/sar/autofocus_op/OPEN_ITEMS.md` -- but they do catch the
+// `operators/sar/autofocus_op/README.md` -- but they do catch the
 // estimator acquiring an extent dependence on a clean scene, which is the
 // nearest thing CI can observe and would be the first sign the cause is
 // simpler than it looks.
@@ -706,7 +706,7 @@ TEST(AutofocusOp, TerminationSeparatesRefusalFromAnUneventfulRun) {
   EXPECT_FALSE(autofocus_refused(termination_of(ok)));
 }
 
-// SAR/OPERATOR_API.md states the AutofocusTermination values are contract:
+// the SAR operator READMEs states the AutofocusTermination values are contract:
 // append, never renumber. They leave the operator as a bare int32 with no
 // accompanying name, so a consumer decoding them has nothing but the number,
 // and a reordering of the enum would change their meaning silently.

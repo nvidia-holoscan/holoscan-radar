@@ -13,6 +13,8 @@ Read one selected CPHD channel and emit device phase history with its pulse geom
 
 Use this source for recorded monostatic CPHD collections. It decodes selected pulse ranges and channels and keeps the collection boundary on the final batch so a downstream aperture manager can flush before the next collection begins.
 
+Declarations and parameter defaults: [cphd_reader_op.hpp](cphd_reader_op.hpp). Behavioral requirements are documented below.
+
 ## Ports
 
 There are no input ports: this is a clock-triggered source. `T=float` means
@@ -179,7 +181,7 @@ offline file, run `ctest --test-dir build -R '^Sar_.*_smoke$' --output-on-failur
 **inside a development container** after configuring the test build. This
 uses the C++ fixture generator. The CPHD reader C++ tests cover decoding,
 selection, boundaries, and malformed inputs. Real-collection validation is
-tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md); see
+tracked in the [qualification notes](#qualification-and-remaining-questions); see
 [SAR data preparation](../../../applications/sar/tools/README.md).
 
 ## Ingestion hardening measurements
@@ -238,3 +240,9 @@ compute capacity. In this Atlanta configuration the extra fixed pinned slot is
 about 56.9 MiB, consistent with the RSS increase. Synchronous I/O on the shared
 worker can delay a due notification; release deadlines are gates, not hard
 real-time guarantees.
+
+## Qualification and remaining questions
+
+Positions and velocities use the Tx/Rcv midpoint. This is a monostatic approximation to the physical two-leg bistatic path; real CPHD ephemerides differ even on nominally monostatic moving platforms. A focus comparison against separate Tx/Rcv paths on a real scene remains open. `SC0`/`SCSS` constancy is checked within each batch to relative tolerance `1e-5`, using the first pulse's axis; a step exactly between batches is not a collection-wide validation. NaN ephemerides pass through with a warning rather than dropping pulses.
+
+The historical 231-file parser survey predates this HSDK 5 binary. Requalify channel selection, SGN=+1, prefixed XML, CI2/CI4/CF8 scaling/AmpSF, FX/TOA, and malformed collections on the built reader. Generated fixtures cover many mechanics but do not replace real TOA or bistatic evidence. The historical survey and source-byte comparisons can be recovered at Git revision `6c261de7c153daa0c8a6be9d6829b149cfbdf41c`, path `operators/io/cphd_reader_op/OPEN_ITEMS.md`. This is provenance, not a claim of current full-format qualification.

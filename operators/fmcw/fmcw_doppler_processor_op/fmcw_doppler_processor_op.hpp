@@ -111,7 +111,7 @@ class FMCWDopplerProcessorOp : public holoscan::Operator<FMCWDopplerProcessorPar
   Output<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // [live] Exact overrides (OPERATOR_API.md).
+  // [live] Exact overrides (the operator README).
   Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
   Input<bool> center_zero_doppler_in{"center_zero_doppler"};
   Input<wire::FMCWWaveformT> waveform_in{"waveform"};
@@ -123,7 +123,7 @@ class FMCWDopplerProcessorOp : public holoscan::Operator<FMCWDopplerProcessorPar
 
   Tensor retained_input_;
 
-  // velocity_bins is optional/latched (OPERATOR_API.md).
+  // velocity_bins is optional/latched (the operator README).
   LatchedOutput velocity_bins_out_;
 
   // Kernel-side caches (window coefficients, seen FFT lengths); allocated

@@ -18,7 +18,7 @@
 namespace holoscan::radar {
 
 // HSDK 5 mapping of the module's `[live]` override convention
-// (OPERATOR_API.md).
+// (the operator README).
 //
 // A `[live]` port joins the data trigger with Exact{}, so an override must
 // carry the trigger sample's capture_time; on_missing SafeDefault{} lets the

@@ -110,10 +110,10 @@ an emit; indefinite hold and interactive X11 validation remain open.
 `dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
 and `output.max_files` to control its files.
 
-See [SAR data preparation](../../../applications/sar/tools/README.md),
+See [SAR data preparation](../tools/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
-[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).
+[shared architecture](../../../docs/ARCHITECTURE.md).
 
 ## Python graph
 
@@ -126,3 +126,11 @@ processing graph shown above. Run it from the host:
 
 See the [shared Python guide](../README.md#python-applications) for CPHD
 inputs, precision, programmatic composition, dumping, and shutdown behavior.
+
+## External parity qualification
+
+The historical Atlanta/NVRadar investigation established the importance of pairing range-profile centring with the correct reference frequency. Current contract range compression uses its centred stored sample, not an external VPH conditioner paired with SC0. Do not mix quantized phase centres with a differently computed R0, or add an extra shift to imitate an old PNG. The parsed `nvradar_vph_path` field has no runtime consumer in the current app.
+
+To reproduce a numerical comparison, use the same local CPHD bytes, pulse range, lattice/frame, range window, transform length/normalization, carrier convention, backend and sample/geometry precision on both sides. Dump complex images and compare physical peak locations, impulse response and amplitude; account for accumulation-order differences when varying pulses per tick. Rotate both APC/SRP and lattice consistently when changing ECEF/ENU, and vary one factor at a time. External NVRadar code/data are not bundled.
+
+Exact historical experimental settings and walk-backs remain available at Git revision `6c261de7c153daa0c8a6be9d6829b149cfbdf41c`, path `applications/sar/spotlight/NVRADAR_PARITY.md`. Those source-branch results do not establish parity for the current HSDK 5 executable. Full real-data focus/radiometric and backend qualification remain open.

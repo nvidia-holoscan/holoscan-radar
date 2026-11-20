@@ -48,7 +48,7 @@ struct ClusterDBSCANState;
 //               dropped (their points relabeled to noise) and a warning is
 //               raised.
 //
-// Parameters (OPERATOR_API.md [live] tags):
+// Parameters (the operator README [live] tags):
 //   epsilon      — std::vector<double>. Neighborhood radius per feature axis.
 //                  Length 1 → isotropic scalar; length num_features → per-axis
 //                  (anisotropic) ellipsoid: q is a neighbor of p when
@@ -111,7 +111,7 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   Input<Tensor> points{"points"};
   Output<Tensor> labels{"labels"};
   Output<Tensor> sizes{"sizes"};
-  // [live] Exact overrides (OPERATOR_API.md).
+  // [live] Exact overrides (the operator README).
   Input<Tensor> epsilon{"epsilon"};
   Input<int64_t> min_points{"min_points"};
   Input<int64_t> max_clusters{"max_clusters"};
@@ -120,7 +120,7 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_points_;
-  // sizes is optional/latched (OPERATOR_API.md).
+  // sizes is optional/latched (the operator README).
   LatchedOutput sizes_out_;
   std::shared_ptr<detail::ClusterDBSCANState> state_;
 
