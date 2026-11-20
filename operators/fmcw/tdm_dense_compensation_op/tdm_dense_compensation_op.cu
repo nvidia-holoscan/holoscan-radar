@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <complex>
 #include <cstdint>
 #include <optional>
@@ -150,6 +151,13 @@ expected<void, Error> TDMDenseCompensationOp<T>::compute(ExecutionContext& conte
   if (!stream)
     return make_unexpected(
         Error{ErrorCode::kNotSupported, std::string(kOpName) + ": no CUDA compute stream"});
+  // All retained artifacts on this instance share one static byte budget.
+  correction_cache_.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(
+      *cache_budget_, context.params<TDMDenseCompensationParams>().cache_budget_bytes, [] {
+        cudaDeviceSynchronize();
+      });
+
   // Execute the device stage on the input runtime stream.
   HOLOSCAN_TRY(run_compute(context, layout, waveform, slots, detail::tdm_output_rd_shape(layout),
                            input, stream));

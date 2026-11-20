@@ -79,9 +79,13 @@ target_compile_definitions(test_perf_yaml_standard PRIVATE
     HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
 radar_add_test(common/test_sim)
 radar_add_test(common/test_sar_progress)
+radar_add_test(common/test_window_place ${CMAKE_DL_LIBS})
+target_include_directories(test_window_place PRIVATE ${PROJECT_SOURCE_DIR})
 radar_add_test(sar/test_phase_correction holoscan::phase_correction_op)
 radar_add_test(sar/test_aperture_manager holoscan::aperture_manager_op)
 radar_add_test(sar/test_backprojection holoscan::backprojection_op)
+radar_add_test(sar/test_backprojection_conversions EXT .cu)
+target_include_directories(test_backprojection_conversions PRIVATE ${PROJECT_SOURCE_DIR}/operators)
 radar_add_test(sar/test_sar_range_compression holoscan::sar_range_compression_op)
 radar_add_test(sar/test_autofocus holoscan::autofocus_op)
 radar_add_test(io/test_tensor_dump holoscan::tensor_dump_op)
@@ -328,6 +332,9 @@ target_include_directories(test_fmcw_simo_report PRIVATE
 
 radar_add_test(app/test_report_shapes holoscan::radar_app)
 radar_add_test(app/test_sar_diagnostics holoscan::radar_app)
+radar_add_test(app/test_sar_mosaic holoscan::radar_app)
+target_sources(test_sar_mosaic PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/mosaic_sample.cu)
 radar_add_test(app/test_shutdown_signals holoscan::radar_app)
 
 # Exercise the driver fallback even on SDK images that include visualization.

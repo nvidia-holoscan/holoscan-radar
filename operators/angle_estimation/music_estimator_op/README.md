@@ -48,6 +48,7 @@ Use after `SnapshotGatherOp` when closely spaced sources must be resolved and a 
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override | Element positions + `λ`; `num_elements` must match `snapshot` channels Cost: Rebuilds steering (+ smoothing plan if enabled); warn-once on smoothing enable. |
 | `angle_convention` | `AngleConvention` | `radar_boresight` | static | Boundary `(az, el)` ↔ unit-vector map; `direction_cosine` is `(u, v)` Cost: Fixes output meaning for the graph. |
 | `az_coordinates` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_az` | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine` Cost: Rebuilds steering manifold. |

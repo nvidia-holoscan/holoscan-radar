@@ -138,7 +138,7 @@ class ProgressTests(unittest.TestCase):
     def test_aws_failure_still_falls_back_to_https(self):
         with tempfile.TemporaryDirectory() as temp:
             job = pull_cphd.PullJob(
-                "scene", "test.cphd", "bucket", "https://test/", Path(temp), False
+                "scene", "test.cphd", "bucket", pull_cphd.UMBRA_HTTPS, Path(temp), False
             )
             response = io.BytesIO(b"data")
             response.headers = {"Content-Length": "4"}
@@ -151,7 +151,7 @@ class ProgressTests(unittest.TestCase):
                 mock.patch.object(
                     pull_cphd, "download_aws", side_effect=subprocess.CalledProcessError(1, "aws")
                 ),
-                mock.patch.object(pull_cphd.urllib.request, "urlopen", return_value=response),
+                mock.patch.object(pull_cphd, "open_source_url", return_value=response),
             ):
                 self.assertEqual(pull_cphd.pull_one(job, False, 1, 1).read_bytes(), b"data")
             self.assertIn("falling back to HTTPS", output.getvalue())

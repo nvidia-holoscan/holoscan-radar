@@ -358,7 +358,7 @@ void CPHDReaderOp<T, TGeom>::maybe_warn_behind() {
 template <typename T, typename TGeom>
 void CPHDReaderOp<T, TGeom>::open_file() {
   const auto& p = read_params_;
-  file_ = std::make_unique<cphd::CphdFile>(files_[file_index_]);
+  file_ = std::make_unique<cphd::CphdFile>(files_[file_index_], p.io_chunk_bytes);
   const auto& info = file_->channel(p.channel);
   if (p.coordinate_frame.frame() != CoordinateFrameType::kEcef) {
     throw std::invalid_argument("CPHDReaderOp: CPHD positions require an ECEF coordinate_frame");
@@ -403,14 +403,14 @@ void CPHDReaderOp<T, TGeom>::start() {
   if (!p.coordinate_frame.is_valid() || p.pulses_per_tick <= 0 ||
       p.pulses_per_tick > *extents_.max_pulses ||
       (!p.pulse_range.empty() && p.pulse_range.size() != 2U) || !std::isfinite(p.playback_rate) ||
-      p.playback_rate < 0.0 || !std::isfinite(p.duty_cycle) || p.duty_cycle <= 0.0 ||
-      p.duty_cycle > 1.0) {
+      p.playback_rate < 0.0 || p.io_chunk_bytes < 8 || p.io_chunk_bytes % 8 != 0 ||
+      !std::isfinite(p.duty_cycle) || p.duty_cycle <= 0.0 || p.duty_cycle > 1.0) {
     throw std::invalid_argument("CPHDReaderOp: invalid reader parameters or tensor bounds");
   }
   files_ = resolve_paths(p.path);
   // Parse every header before producing data, including later collections.
   for (const auto& path : files_) {
-    cphd::CphdFile check(path);
+    cphd::CphdFile check(path, p.io_chunk_bytes);
     check.channel(p.channel);
   }
   file_index_ = 0;

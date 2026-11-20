@@ -6,8 +6,9 @@
 #include <cuda/std/complex>
 #include <cuda_runtime_api.h>
 
-#include <bit>
+#include <cstddef>
 #include <cstdint>
+#include <bit>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -212,6 +213,16 @@ expected<const detail::PhaseShiftBeamformerArtifacts*, Error> prepare_steering_a
     ConfigCache<detail::PhaseShiftBeamformerArtifacts>& cache,
     const PhaseShiftBeamformerStageConfig& stage, cudaStream_t stream) {
   try {
+    // Compare retained source metadata before serializing a potentially large key.
+    if (const auto* recent = cache.recent_if([&](const auto& artifact) {
+          return same_geometry_bytes(artifact.geometry, stage.geometry) &&
+                 artifact.convention == stage.convention &&
+                 same_double_vector_bytes(artifact.az_coordinates, stage.az_coordinates) &&
+                 same_double_vector_bytes(artifact.el_coordinates, stage.el_coordinates) &&
+                 same_window_bytes(artifact.taper, stage.taper);
+        }))
+      return recent;
+
     const std::string cache_key = steering_cache_key(
         stage.geometry, stage.convention, stage.az_coordinates, stage.el_coordinates, stage.taper);
     const detail::PhaseShiftBeamformerArtifacts& artifacts =
@@ -222,7 +233,12 @@ expected<const detail::PhaseShiftBeamformerArtifacts*, Error> prepare_steering_a
                   stage.taper, BeamOrder::kAzMajor, SteeringLayout::kBeamMajor, /*conjugate=*/true,
                   stream),
               .az_grid = make_device_grid<T>(stage.az_coordinates, stream),
-              .el_grid = make_device_grid<T>(stage.el_coordinates, stream)};
+              .el_grid = make_device_grid<T>(stage.el_coordinates, stream),
+              .geometry = stage.geometry,
+              .convention = stage.convention,
+              .az_coordinates = stage.az_coordinates,
+              .el_coordinates = stage.el_coordinates,
+              .taper = stage.taper};
         });
     if (!artifacts.weights || !artifacts.az_grid || !artifacts.el_grid) {
       return make_unexpected(
@@ -333,25 +349,15 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(ExecutionContext& conte
     return make_unexpected(
         Error{ErrorCode::kNotSupported, "PhaseShiftBeamformerOp: no CUDA compute stream"});
   }
-  // Prepare or reuse cached artifacts without changing tick coherence.
-  const bool last_steering_hit =
-      last_steering_artifact_ != nullptr &&
-      same_geometry_bytes(last_steering_geometry_, plan.stage.geometry) &&
-      last_steering_convention_ == plan.stage.convention &&
-      same_double_vector_bytes(last_steering_az_, plan.stage.az_coordinates) &&
-      same_double_vector_bytes(last_steering_el_, plan.stage.el_coordinates) &&
-      same_window_bytes(last_steering_taper_, plan.stage.taper);
-  const detail::PhaseShiftBeamformerArtifacts* artifacts = last_steering_artifact_;
-  if (!last_steering_hit) {
-    HOLOSCAN_TRY(auto rebuilt, prepare_steering_artifacts<T>(artifact_cache_, plan.stage, stream));
-    artifacts = rebuilt;
-    last_steering_geometry_ = plan.stage.geometry;
-    last_steering_convention_ = plan.stage.convention;
-    last_steering_az_ = plan.stage.az_coordinates;
-    last_steering_el_ = plan.stage.el_coordinates;
-    last_steering_taper_ = plan.stage.taper;
-    last_steering_artifact_ = artifacts;
-  }
+  // All retained artifacts on this instance share one static byte budget.
+  artifact_cache_.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(
+      *cache_budget_, context.params<PhaseShiftBeamformerParams>().cache_budget_bytes, [] {
+        cudaDeviceSynchronize();
+      });
+
+  // Fetch on every tick so eviction/uncached execution cannot leave a stale borrow.
+  HOLOSCAN_TRY(auto artifacts, prepare_steering_artifacts<T>(artifact_cache_, plan.stage, stream));
 
   // Prepare the required dense cube before publishing optional sidebands.
   const void* input_ptr = rd.data();

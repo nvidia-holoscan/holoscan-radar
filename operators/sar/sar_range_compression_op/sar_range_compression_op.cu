@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -164,6 +165,15 @@ expected<void, Error> SARRangeCompressionOp<T>::compute(ExecutionContext& contex
     return make_unexpected(
         Error{ErrorCode::kNotSupported, std::string(kOpName) + ": no CUDA compute stream"});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  state_->windows.bind(cache_budget_);
+  state_->seen_fft_keys.bind(cache_budget_);
+  state_->scratch.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(
+      *cache_budget_, context.params<SARRangeCompressionParams>().cache_budget_bytes, [] {
+        cudaDeviceSynchronize();
+      });
+
   const std::vector<int64_t> out_shape{shape[0], bins};
   const bool warn_on_rebuild = !range_window_in.is_missing() || !nfft_in.is_missing();
 

@@ -19,6 +19,19 @@ for a missing tick, and never latch an earlier override. Optional outputs are
 latched so unwired outputs cause no work. The HSDK 5 Graph requires distinct
 input and output names within an operator.
 
+### Retained range-compression caches
+
+`SARRangeCompressionOp` adds static `cache_budget_bytes` (unsigned bytes,
+default 2147483648 = 2 GiB); users can raise/lower it in Params/YAML/Python.
+It is a retention ceiling with no upfront reservation; `0` disables retention.
+Windows, transform-warning keys and shape scratch share this budget and LRU
+eviction. Oversized artifacts execute uncached with a bounded warning. Active
+GPU borrowers stay alive until completion. Eviction/uncached cleanup can wait
+for device completion; ordinary cache hits do not synchronize. MatX-owned caches and
+ordinary execution state/output pools are excluded. See the shared
+[cache budget contract](../OPERATOR_API.md#retained-configuration-cache-budget)
+for accounting, diagnostics and the workload sizing audit.
+
 ### Implemented operator ports
 
 **Application diagnostics:** the optional `FormationHud` constructor capture
@@ -70,7 +83,7 @@ The SAR descriptors are `CoordinateFrame`,
 
 | Operator | Params |
 | --- | --- |
-| `CPHDReaderOp` | `path` required; `coordinate_frame` required; `pulses_per_tick` required; `channel=0`; `pulse_range=[]`; `loop=false`; `playback_rate=0` (unmetered waits on full); `duty_cycle=1`; static `wait_for_downstream=false` (paced fail-fast unless true) |
+| `CPHDReaderOp` | `path` required; `coordinate_frame` required; `pulses_per_tick` required; static `io_chunk_bytes=67108864`; `channel=0`; `pulse_range=[]`; `loop=false`; `playback_rate=0` (unmetered waits on full); `duty_cycle=1`; static `wait_for_downstream=false` (paced fail-fast unless true) |
 | `SARRangeCompressionOp` | `[live] range_window=rectangular`; `[live] waveform=unset`; `[live] fft_norm=backward`; `[live] nfft=observed num_samples`; `[live] propagation_speed=299792458 m/s` |
 | `ApertureManagerOp` | `max_aperture_pulses=0`; `emit_interval_pulses=0`; `emit_mode=continue`; `aperture_window=none` (rectangular, all +1); all static |
 | `BackprojectionOp` | `coordinate_frame` required; `sample_geometry` required unless sample points are supplied; `[live] range_bin_spacing=unset`, `range_bin_origin=unset`, `reference_frequency` must be set to first fast-time sample frequency, `interpolation=linear`; static `backend=nvradar_block_anchored_expanded_throughput_phase_lut_vec`, `geometry_change=reset` |
@@ -405,6 +418,7 @@ Reads a CPHD collection and emits phase history together with the per-pulse geom
 - `path` — string or string vector. A single CPHD file, a directory of them, or an explicit ordered list. A directory is enumerated in lexicographic order; an explicit list is read in the order given, which is the form to use when lexicographic order is not collection order. Static. Default: none (required).
 - `coordinate_frame` — CoordinateFrame. The frame the emitted positions are expressed in. Where the file declares a frame, a disagreement is an **error**, not a silent reinterpretation. Static. Default: none (required).
 - `pulses_per_tick` — int. Batch size along the pulse axis; sets the granularity at which the accumulating formation stage sees the aperture. Static. Default: none (required).
+- `io_chunk_bytes` — int, at least 8 and a multiple of 8. Maximum bytes per filesystem read, per I/O worker; larger tick spans are split without changing outputs or tick size. This is transfer granularity, not a total-memory budget. Static. Default: **67108864** (64 MiB). **Contract addition 2026-11-19.**
 - `channel` — int. Which CPHD channel to read, for multi-channel collections. One channel per instance is deliberate — see Notes. Static. Default: 0.
 - `pulse_range` (optional) — int, `(2,)`. Half-open `[first, last)` pulse range to read, for processing a subset of a long collection. Applies **per file**, since each file is its own collection. Static. Default: none (whole collection).
 - `loop` **[CONTRACT CHANGE 2026-08-26]** — bool. After the last file, wrap to the first rather than ending the stream. Every seam — including last→first — is `collection_boundary`; `end_of_stream` is never stamped. The graph runs until SIGINT (or an application-owned stop). Static. Default: **false** (today's termination).

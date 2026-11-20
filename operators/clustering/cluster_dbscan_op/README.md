@@ -88,7 +88,7 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
 - **`labels`.** Same `num_points` as `points`.
 - **`sizes`.** `num_clusters` after the cap (`≤ max_clusters` when set). Reallocated per tick.
 - **`points`.** Rank 2, `num_features >= 1`. Precision is template `T`; no leading batch.
-- **Extents.** Ctor requires `max_points` (labels pool) and `max_clusters` (sizes pool). `max_features` bounds the `epsilon` override payload and is checked only when an override actually arrives, so a graph that never sends one compiles and runs with `max_features` unset. There is **no** named tick reject when `num_points > max_points` or `reported_clusters > max_clusters` — oversize loans fail at allocate time.
+- **Extents.** Ctor requires `max_points` (labels pool) and `max_clusters` (sizes pool). Inputs with `num_points > max_points` fail before tick workspace allocation or GPU work; points are never truncated. Inputs within the bound retain the same clustering behavior, including quadratic worst-case work. `max_features` bounds the live `epsilon` payload only when an override arrives, so it may be unset when no override is sent. Oversized `sizes` loans still fail at allocation; the pool extent is distinct from the live `max_clusters` retention parameter.
 - **Legal mid-stream change.** `num_points` / `num_features` inferred per tick. A `[live]` `epsilon` / `min_points` / `max_clusters` change changes membership without changing `labels` rank.
 - **Rejected combinations:**
 
@@ -103,6 +103,7 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
 | Scalar zero or all-zero vector | `ClusterDBSCANOp: epsilon must select at least one active feature` |
   | `epsilon` override with no `max_features` | `ClusterDBSCANOp: MaxTensorExtents.max_features must be positive to accept an epsilon override` |
   | `num_points > INT_MAX` | `ClusterDBSCANOp: num_points exceeds the supported range` |
+  | `num_points > max_points` | `ClusterDBSCANOp: num_points N exceeds MaxTensorExtents.max_points M` |
   | Missing ctor extent | `ClusterDBSCANOp: MaxTensorExtents.max_points must be a positive value (required for Tensor pool sizing)` (same for `max_clusters`) |
   | Non-device / non-contiguous / wrong dtype | `ClusterDBSCANOp: tensor received on input port 'points' …` |
   | No CUDA stream | `ClusterDBSCANOp: no CUDA compute stream` |

@@ -60,6 +60,26 @@ TEST(TransmitFrameCoordinator, PreservesTransmitStampAcrossDifferentSourceActiva
   EXPECT_THROW(coordinator.claim(11U), std::runtime_error);
 }
 
+TEST(MultiProfileConfig, RejectsOverflowingLaterProfileBeforeAllocating) {
+  const PresetOverride invalid(smoke_config(),
+                               profile_patch("chirps_per_tx", "9223372036854775807"));
+  EXPECT_THROW(workflow::load_config(invalid.path()), std::invalid_argument);
+}
+
+TEST(MultiProfileConfig, ChecksSourceAllowanceForLaterProfile) {
+  // Near uses about 12 MiB and far about 24 MiB. The second profile must
+  // fail even though the first profile fits the authored 16 MiB allowance.
+  const PresetOverride too_small(smoke_config(), "app:\n    max_source_working_bytes: 16777216");
+  try {
+    (void)workflow::load_config(too_small.path());
+    FAIL() << "Later profile bypassed source allowance";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("app.max_source_working_bytes"), std::string::npos);
+  }
+  const PresetOverride sufficient(smoke_config(), "app:\n    max_source_working_bytes: 33554432");
+  EXPECT_NO_THROW(workflow::load_config(sufficient.path()));
+}
+
 TEST(TransmitFrameCoordinator, ExpiresAndFinalizesUnmatchedFrames) {
   app::TransmitFrameCoordinator coordinator(2U);
   coordinator.register_transmit(app::TransmitReceipt{4U, time_at(40), 0U});

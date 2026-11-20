@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <initializer_list>
 #include <type_traits>
 #include <vector>
 
@@ -40,6 +41,19 @@ struct PhaseShiftBeamformerArtifacts {
   std::shared_ptr<Tensor> weights;
   std::shared_ptr<Tensor> az_grid;
   std::shared_ptr<Tensor> el_grid;
+  ArrayGeometry geometry;
+  AngleConvention convention;
+  std::vector<double> az_coordinates;
+  std::vector<double> el_coordinates;
+  WindowSpec taper;
+  std::size_t cache_bytes() const {
+    std::size_t bytes = cache_size_add(cache_payload_bytes(weights), cache_payload_bytes(az_grid));
+    bytes = cache_size_add(bytes, cache_payload_bytes(el_grid));
+    for (const auto* values :
+         {&geometry.element_positions, &az_coordinates, &el_coordinates, &taper.coefficients})
+      bytes = cache_size_add(bytes, values->capacity() * sizeof(double));
+    return bytes;
+  }
 };
 
 }  // namespace detail
@@ -72,11 +86,15 @@ struct PhaseShiftBeamformerParams {
   std::vector<double> az_coordinates{};
   std::vector<double> el_coordinates{};
   WindowSpec array_taper{};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     PhaseShiftBeamformerParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.PhaseShiftBeamformerParams", 2),
+    holoscan::param_schema("com.nvidia.holoscan.radar.PhaseShiftBeamformerParams", 3),
+    holoscan::field<&PhaseShiftBeamformerParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&PhaseShiftBeamformerParams::array_geometry>("array_geometry")
         .description("Element positions and wavelength; num_elements must match "
                      "rd_maps channel axis"),
@@ -122,6 +140,8 @@ class PhaseShiftBeamformerOp : public holoscan::Operator<PhaseShiftBeamformerPar
   Input<WireWindowSpec> array_taper{"array_taper"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   // Keep the previous activation's input alive across ticks so async
   // device reads cannot outlive the buffer.
   Tensor retained_input_;
@@ -129,12 +149,6 @@ class PhaseShiftBeamformerOp : public holoscan::Operator<PhaseShiftBeamformerPar
   // Conjugated steering weights and their physical axes, built on device and
   // cached by the complete geometry/convention/grid/taper configuration.
   ConfigCache<detail::PhaseShiftBeamformerArtifacts> artifact_cache_;
-  ArrayGeometry last_steering_geometry_{};
-  AngleConvention last_steering_convention_{};
-  std::vector<double> last_steering_az_{};
-  std::vector<double> last_steering_el_{};
-  WindowSpec last_steering_taper_{};
-  const detail::PhaseShiftBeamformerArtifacts* last_steering_artifact_{nullptr};
 
   // The physical axes are optional/latched outputs.
   LatchedOutput az_grid_out_;

@@ -124,6 +124,7 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
   LatchedOutput sizes_out_;
   std::shared_ptr<detail::ClusterDBSCANState> state_;
 
+  std::int64_t max_points_{0};
   std::int64_t max_features_{0};
   std::size_t max_labels_byte_span_{0U};
   std::size_t max_sizes_byte_span_{0U};

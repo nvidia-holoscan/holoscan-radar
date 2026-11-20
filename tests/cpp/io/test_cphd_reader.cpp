@@ -16,6 +16,7 @@
 #include <cstring>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <future>
 #include <stdexcept>
@@ -483,6 +484,142 @@ TEST(CphdReaderOp, FirstBatchAsapAndStopInterruptsPacingQuietAndEof) {
   fs::remove(path);
 }
 
+// Change metadata without shifting the fixed binary-block locations.
+void replace_fixture_metadata(const fs::path& path, const std::string& before,
+                              const std::string& after) {
+  std::ifstream input(path, std::ios::binary);
+  std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  input.close();
+  const size_t end = contents.find("</CPHD>") + 7U;
+  std::string xml = contents.substr(1024U, end - 1024U);
+  const size_t position = xml.find(before);
+  ASSERT_NE(position, std::string::npos);
+  xml.replace(position, before.size(), after);
+  ASSERT_LT(xml.size(), 4096U - 1024U);
+  const std::string marker = "XML_BLOCK_SIZE := ";
+  std::string header = contents.substr(0, contents.find('\f') + 2U);
+  const size_t size_start = header.find(marker) + marker.size();
+  header.replace(size_start, header.find('\n', size_start) - size_start,
+                 std::to_string(xml.size()));
+  std::fill(contents.begin(), contents.begin() + 4096, '\0');
+  contents.replace(0, header.size(), header);
+  contents.replace(1024U, xml.size(), xml);
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+}
+
+TEST(CphdFile, RejectsInvalidSpansBeforeAllocation) {
+  const fs::path path = fs::temp_directory_path() / "holoscan_cphd_span_bounds.cphd";
+  const std::array<std::pair<std::string, std::string>, 5> mutations{{
+      {"<NumBytesPVP>104", "<NumBytesPVP>34359738368"},
+      {"<NumBytesPVP>104", "<NumBytesPVP>9223372036854775800"},
+      {"<PVPArrayByteOffset>0", "<PVPArrayByteOffset>9223372036854775807"},
+      {"<NumSamples>8", "<NumSamples>9223372036854775807"},
+      {"<SignalArrayByteOffset>0", "<SignalArrayByteOffset>9223372036854775807"},
+  }};
+  for (const auto& [before, after] : mutations) {
+    make_fixture(path);
+    replace_fixture_metadata(path, before, after);
+    CphdFile file(path.string());
+    if (before.find("NumSamples") != std::string::npos ||
+        before.find("SignalArray") != std::string::npos) {
+      EXPECT_THROW(file.read_signal(0, 0, 1), std::runtime_error) << before;
+    } else {
+      EXPECT_THROW(file.read_pvp_block(0, 0, 5), std::runtime_error) << before;
+    }
+  }
+  fs::remove(path);
+}
+
+TEST(CphdFile, ChecksTruncatedSpansWithoutDiscardingValidPrefix) {
+  const fs::path path = fs::temp_directory_path() / "holoscan_cphd_truncated_spans.cphd";
+  make_fixture(path);
+  fs::resize_file(path, 8192 + 2 * 8 * 8);
+  CphdFile file(path.string());
+  EXPECT_EQ(file.read_signal(0, 0, 2).size(), 16U);
+  EXPECT_THROW(file.read_signal(0, 2, 1), std::runtime_error);
+  EXPECT_TRUE(file.read_signal(0, 2, 0).empty());
+  EXPECT_THROW(file.read_pvp(0, "TxTime", 0, 1, -1), std::runtime_error);
+  fs::remove(path);
+}
+
+TEST(CphdFile, EnforcesDeclaredBlockBoundariesAndAcceptsExactEnd) {
+  const fs::path path = fs::temp_directory_path() / "holoscan_cphd_declared_spans.cphd";
+  for (const bool short_block : {false, true}) {
+    make_fixture(path);
+    std::fstream stream(path, std::ios::binary | std::ios::in | std::ios::out);
+    std::string header;
+    std::getline(stream, header, '\f');
+    header += "PVP_BLOCK_SIZE := " + std::to_string(short_block ? 519 : 520) + "\n";
+    header += "SIGNAL_BLOCK_SIZE := " + std::to_string(short_block ? 319 : 320) + "\n\f\n";
+    stream.seekp(0);
+    stream.write(header.data(), static_cast<std::streamsize>(header.size()));
+    stream.close();
+    CphdFile file(path.string());
+    EXPECT_EQ(file.read_signal(0, 0, 1).size(), 8U);
+    if (short_block) {
+      EXPECT_THROW(file.read_pvp_block(0, 0, 5), std::runtime_error);
+      EXPECT_THROW(file.read_signal(0, 4, 1), std::runtime_error);
+    } else {
+      EXPECT_EQ(file.read_pvp_block(0, 0, 5).count(), 5);
+      EXPECT_EQ(file.read_signal(0, 4, 1).size(), 8U);
+      EXPECT_EQ(file.read_pvp_block(0, 5, 0).count(), 0);
+      EXPECT_TRUE(file.read_signal(0, 5, 0).empty());
+    }
+  }
+  fs::remove(path);
+}
+
+TEST(CphdFile, BoundedReadsPreserveSampleFormatsAndAmplitudeScaling) {
+  const fs::path path = fs::temp_directory_path() / "holoscan_cphd_scaled_formats.cphd";
+  for (const std::string format : {"CF8", "CI4", "CI2"}) {
+    make_fixture(path);
+    replace_fixture_metadata(path, "<NumBytesPVP>104", "<NumBytesPVP>112");
+    replace_fixture_metadata(path, "</PVP>",
+                             "<AmpSF><Offset>13</Offset><Size>1</Size><Format>F8</Format>"
+                             "</AmpSF></PVP>");
+    replace_fixture_metadata(path, "<SignalArrayFormat>CF8", "<SignalArrayFormat>" + format);
+    std::array<char, 520> pvps{};
+    {
+      std::ifstream input(path, std::ios::binary);
+      input.seekg(4096);
+      input.read(pvps.data(), static_cast<std::streamsize>(pvps.size()));
+    }
+    {
+      std::ofstream output(path, std::ios::binary | std::ios::in | std::ios::out);
+      output.seekp(4096);
+      for (size_t pulse = 0; pulse < 5; ++pulse) {
+        output.write(pvps.data() + pulse * 104, 104);
+        holoscan::radar::testing::cphd_fixture::write_be64(output, 2.0);
+      }
+      output.seekp(8192);
+      for (int sample = 0; sample < 40; ++sample) {
+        for (const int value : {sample, -sample}) {
+          if (format == "CF8") {
+            holoscan::radar::testing::cphd_fixture::write_be32(output, static_cast<float>(value));
+          } else if (format == "CI4") {
+            const auto bits = static_cast<uint16_t>(static_cast<int16_t>(value));
+            output.put(static_cast<char>(bits >> 8));
+            output.put(static_cast<char>(bits));
+          } else {
+            output.put(static_cast<char>(static_cast<int8_t>(value)));
+          }
+        }
+      }
+    }
+    CphdFile file(path.string());
+    const auto single = file.read_signal(0, 0, 5);
+    const auto pvp = file.read_pvp_block(0, 0, 5);
+    std::vector<std::complex<double>> dual(40);
+    file.read_signal_into<double>(0, 0, 5, dual.data(), &pvp);
+    for (size_t sample = 0; sample < single.size(); ++sample) {
+      EXPECT_EQ(single[sample], std::complex<float>(2.0F * sample, -2.0F * sample)) << format;
+      EXPECT_EQ(dual[sample], std::complex<double>(2.0 * sample, -2.0 * sample)) << format;
+    }
+  }
+  fs::remove(path);
+}
+
 TEST(CphdFile, CppFixtureDecodesHeaderPvpAndSignal) {
   const fs::path path = fs::temp_directory_path() / "holoscan_sar_cphd_cpp_fixture.cphd";
   make_fixture(path);
@@ -504,6 +641,21 @@ TEST(CphdFile, CppFixtureDecodesHeaderPvpAndSignal) {
   EXPECT_NEAR(signal[0].real(), std::cos(0.1), 1e-6);
   EXPECT_NEAR(signal[0].imag(), std::sin(0.1), 1e-6);
   EXPECT_NEAR(signal[23].real(), std::cos(1.7), 1e-6);
+  fs::remove(path);
+}
+
+TEST(CphdFile, ConfigurableReadChunksPreserveDataAndRejectInvalidSizes) {
+  const fs::path path = fs::temp_directory_path() / "holoscan_cphd_read_chunks.cphd";
+  make_fixture(path);
+  const auto expected = CphdFile(path.string()).read_signal(0, 0, 5);
+  for (const int64_t chunk : {8, 24, 64, 67108864}) {
+    CphdFile file(path.string(), chunk);
+    EXPECT_EQ(file.read_signal(0, 0, 5), expected);
+    EXPECT_EQ(file.read_pvp(0, "TxTime", 0, 5, 1).size(), 5U);
+  }
+  for (const int64_t chunk : {-8, 0, 1, 7, 9}) {
+    EXPECT_THROW((void)CphdFile(path.string(), chunk), std::invalid_argument);
+  }
   fs::remove(path);
 }
 
@@ -652,6 +804,7 @@ TEST(CphdReaderOp, EmitsEachBatchAndTypedEndBoundary) {
   params.coordinate_frame =
       CoordinateFrame(CoordinateFrameSpec{.frame = CoordinateFrameType::kEcef});
   params.pulses_per_tick = 2;
+  params.io_chunk_bytes = 8;
   fixture.set_params(params);
   fixture.capture_snapshot<holoscan::Tensor>("phase_history", 3U,
                                              2U * 8U * sizeof(std::complex<float>));

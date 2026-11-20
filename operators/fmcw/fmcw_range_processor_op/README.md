@@ -42,6 +42,7 @@ adc_cube → FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessor
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `range_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Fast-time window before the range FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) Cost: Rebuilds cached premultiplier / window taps on an unseen spec, warning once. |
 | `apply_dechirp` | bool | `false` | `[live]` Exact | Software dechirp; requires a valid `waveform` and complex-IF input Cost: Rebuilds the cached premultiplier when combined with the waveform / window. |
 | `waveform` | `FMCWWaveformDescriptor` | none (`is_valid() == false`) | `[live]` Exact via wire schema | Dechirp reference (`reference_samples`, or `slope` + `sample_rate`) and the `range_bins` axis Cost: Rebuilds dechirp reference / premultiplier when `apply_dechirp` is true; required for `range_bins`. |

@@ -25,6 +25,53 @@ Fat Tensor outputs take `MaxTensorExtents` at `graph.op()` for HSDK 5 pool sizin
 
 ---
 
+### Retained configuration cache budget
+
+**Contract amendment, approved 2026-11-19.** The following operators expose a static
+`cache_budget_bytes` unsigned byte count, configurable through Params, YAML, and
+the schema-driven Python provider. It is shared across all caches on one
+operator instance. It reserves no memory upfront. Users may raise or lower it;
+`0` disables retention. There is no separate entry-count setting.
+
+| Operators | Default bytes | Default size |
+| --- | --- | --- |
+| `FMCWRangeProcessorOp`, `FMCWDopplerProcessorOp`, `FMCWRangeDopplerProcessorOp`, `ClutterFilterOp`, `TDMDenseCompensationOp`, `TDMSparseCompensationOp`, `DDMSparseDemultiplexOp`, `DDMPowerFoldOp`, `PhaseShiftBeamformerOp`, `BeamscanEstimatorOp`, `MUSICEstimatorOp`, `MVDREstimatorOp` | 67108864 | 64 MiB each |
+| `DDMDenseDemultiplexOp` | 134217728 | 128 MiB |
+| `SARRangeCompressionOp` | 2147483648 | 2 GiB |
+
+Retention uses least-recently-used eviction across an instance's caches.
+Revisiting an evicted configuration rebuilds it. An artifact larger than the
+budget still executes, without retention and with a warning. GPU borrowers stay
+alive through completion. Eviction and uncached cleanup may synchronize the device and
+increase latency; ordinary cache hits add no synchronization. Diagnostics are
+bounded per instance (one each for reconfiguration, insufficient capacity, and
+oversized artifacts), so a configuration sweep cannot grow warning history or
+flood logs. A static configuration fitting the budget produces no capacity warning.
+
+Accounted bytes include tensor payloads, cached object sizes, both retained key
+copies, and a conservative allowance for cache nodes/control blocks. The shared
+budget includes SAR range-compression shape scratch and dense DDM tiles plus its
+direct cuFFT-reported work areas. It does not cap peak memory, builders, current
+tick borrows, output pools, ordinary single-current execution state, allocator
+rounding, opaque library metadata, or MatX-owned caches. No MatX cache is evicted
+or drained by this policy. Existing allocation arithmetic checks still apply.
+
+Sizing audit: all configuration artifacts in inspected application/performance
+presets fit 64 MiB. The largest configured MUSIC/MVDR manifold is about 2.62 MiB
+single / 5.24 MiB double after spatial smoothing. A hypothetical 256-channel,
+181-by-91 grid needs about 32.17 / 64.34 MiB plus bookkeeping and can require a
+larger budget. SAR Atlanta autofocus scratch is about 291.16 MiB per shape in
+single precision; two double-precision shapes need about 1.14 GiB, motivating
+the 2 GiB default. Large nonlinear DDM benchmark tiles alone occupy 64 MiB,
+before direct cuFFT work areas, motivating its higher default. These are payload
+calculations, not measured allocator peaks. The large dense DDM case was also
+qualified on NVIDIA GB10 with CUDA 13.2: both precisions report 67108968 bytes
+for tiles plus known scratch state; cuFFT reports no additional work area for
+this power-of-two case. The 128 MiB default therefore fits it with room for
+configuration artifacts. Opaque cuFFT plan metadata remains excluded.
+
+---
+
 ## Coordinate conventions
 
 The angle-estimation operators carry azimuth/elevation, which is the module's single biggest cross-domain interoperability hazard — radar, robotics, automated-driving, aerospace, and remote-sensing communities each define these angles differently. The key to a domain-agnostic API is recognizing that "coordinate frame" is really **two independent problems** that are routinely conflated:
@@ -476,6 +523,7 @@ GO/SO start-time pre-calibration (needs an RD-map shape hint, since their LUTs a
 
 #### ClusterDBSCANOp
 
+- **Input bound (clarified 2026-11-19).** Reject `num_points > MaxTensorExtents.max_points` before allocating tick workspace or launching GPU work. This is the existing output-pool sizing bound; it does not truncate points or introduce a separate workload budget. Results within the bound are unchanged.
 - **In:** `points` — float32 / float64, `(num_points, num_features)`. Caller-assembled feature matrix (e.g. `[range, velocity, az, el]`); radar-agnostic.
 - **Out:** `labels` — int, `(num_points,)`. Cluster id per point, noise = `-1`; row-aligned with `points`. Clusters are numbered by **descending point count** (cluster `0` is the largest), ties broken by ascending component root (lowest member row index). A **border point** reachable from cores in more than one cluster joins the core neighbor with the **numerically smallest component root** (lowest member row index) — the deterministic, order-independent tie-break for DBSCAN's inherent inter-cluster-border ambiguity. (The partition — core structure and noise set — is identical under any faithful DBSCAN; only which cluster a straddling border point joins is pinned here.) Deterministic: `labels` is a pure function of `(points, epsilon, min_points)`.
 - **Out:** `sizes` (optional, **latched**) — int, `(num_clusters,)`. Point count per cluster, in the same descending order as the ids (so `sizes` is non-increasing); sized to the actual cluster count and reallocated per tick. If `max_clusters` is set and exceeded, the smallest surplus clusters are dropped (their points → noise) and a warning raised.

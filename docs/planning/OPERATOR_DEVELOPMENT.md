@@ -475,15 +475,15 @@ Use `ConfigCache` (or an equivalent keyed cache) for plans, windows, LUTs,
 CUB state. Rules from `operators/common/README.md`:
 
 - Initial parameter-driven build: silent.
-- Override to an unseen key: warn once, build, cache.
-- Alternating values must not thrash.
+- Override to an unseen key: build under the shared [cache budget contract](OPERATOR_API.md#retained-configuration-cache-budget); bounded diagnostics avoid retaining an unbounded history.
+- Alternating values reuse retained artifacts when their working set fits the configured budget; eviction may rebuild them.
 
 Choose state by ownership and cardinality:
 
 - Bounded scratch or index tables whose maximum follows from constructor
   extents are constructor-created reusable state.
 - One replace-in-place artifact uses a simple structural key.
-- Multiple costly configurations with warn-once history use `ConfigCache`.
+- Multiple costly configurations use `ConfigCache` with bounded diagnostics and a shared instance byte budget.
 
 A cache key covers every behavior-affecting field, including
 variant-specific fields, and the cached value is the complete immutable

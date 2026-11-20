@@ -153,6 +153,7 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 #### ClusterDBSCANOp
 
+- Inputs above ctor `MaxTensorExtents.max_points` reject before workspace allocation or GPU clustering; the exact bound remains accepted in float and double with unchanged labels.
 - Synthetic blobs in feature space → correct membership; noise points labeled `−1`.
 - Per-axis `epsilon` correctly handles mixed-unit (anisotropic) features; `min_points` separates core vs. noise.
 - A zero per-axis `epsilon` excludes that feature completely, including non-finite pass-through values; all-zero and negative encodings reject, and default `min_points` counts only active features.

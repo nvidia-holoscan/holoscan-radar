@@ -146,6 +146,7 @@ Twelve of the seventeen contracted operators appear below. The five omitted — 
 - **Quantized comparisons are scale-factor-aware.** The per-vector scale factor must be applied before the residual is judged, or the test measures the scale factor rather than the round trip. `ci8` gets its own case rather than riding on `ci16`: its far coarser step is exactly where a tolerance written for 16-bit passes silently. Same class as the `amp8phs8` qualification already made for SICD.
 - Emitted `positions` match the file's Aperture Reference Point record; a `coordinate_frame` disagreeing with the file's declared frame is an **error**, not a silent reinterpretation.
 - `pulses_per_tick` batching: the concatenation of all ticks equals the selected pulse range, with nothing dropped or duplicated at batch boundaries.
+- **`io_chunk_bytes` transfer granularity.** Default 67108864; reject integers below 8 or not divisible by 8. Smaller chunks preserve decoded signal/PVP values, tick shapes, and boundary placement. Exercise the parameter through the native reader and Python provider.
 - **The final batch is short** when the range is not a multiple of the batch size, and downstream still forms a complete image — the regression that catches a stage reading the parameter instead of the tensor.
 - `pulse_range` selects the requested subset; an out-of-bounds range errors.
 - A truncated or malformed file fails with a clear error rather than emitting partial garbage.

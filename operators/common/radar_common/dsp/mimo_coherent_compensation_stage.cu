@@ -7,6 +7,7 @@
 #include <cuda_runtime_api.h>
 #include <cufft.h>
 
+#include <cstddef>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -14,10 +15,13 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
+#include <memory>
+#include <limits>
+#include <initializer_list>
 #include <vector>
 
 #include "radar_common/math/constants.hpp"
+#include "radar_common/math/checked_sizes.hpp"
 
 namespace holoscan::radar::detail {
 
@@ -695,6 +699,7 @@ struct CufftPlanCache {
   int nbatch{0};
   int nfft{0};
   int is_float{-1};
+  size_t work_bytes{0};
 
   ~CufftPlanCache() {
     if (plan != 0) {
@@ -725,6 +730,8 @@ struct CufftPlanCache {
     if (cufftSetStream(plan, stream) != CUFFT_SUCCESS) {
       throw std::runtime_error("ddm correlate: cufftSetStream failed");
     }
+    if (cufftGetSize(plan, &work_bytes) != CUFFT_SUCCESS)
+      throw std::runtime_error("ddm correlate: cufftGetSize failed");
     nbatch = batch;
     nfft = fft_len;
     is_float = want;
@@ -774,27 +781,6 @@ struct TileWorkspace {
   }
 };
 
-// Per-operator-instance scratch (keyed by DDMDenseDemultiplexOp*).
-// Not shared across instances so interleaved compute() cannot destroy another
-// op's in-flight cuFFT plan.
-struct CorrelateScratch {
-  CufftPlanCache plan;
-  TileWorkspace<float> ws_f;
-  TileWorkspace<double> ws_d;
-};
-
-std::unordered_map<void*, CorrelateScratch>& correlate_scratch_map() {
-  static thread_local std::unordered_map<void*, CorrelateScratch> map;
-  return map;
-}
-
-CorrelateScratch& scratch_for(void* owner) {
-  if (owner == nullptr) {
-    throw std::invalid_argument("ddm correlate: owner must be non-null");
-  }
-  return correlate_scratch_map()[owner];
-}
-
 template <typename T>
 void cufft_c2c(cufftHandle plan, Complex<T>* data, int direction) {
   if constexpr (sizeof(T) == 4) {
@@ -812,17 +798,62 @@ void cufft_c2c(cufftHandle plan, Complex<T>* data, int direction) {
 
 }  // namespace
 
-void release_ddm_correlate_scratch(void* owner) {
-  if (owner == nullptr) {
-    return;
+struct DdmCorrelateScratch {
+  CufftPlanCache plan;
+  CufftPlanCache tail_plan;
+  TileWorkspace<float> ws_f;
+  TileWorkspace<double> ws_d;
+  int64_t tile_r{0};
+};
+
+std::shared_ptr<DdmCorrelateScratch> make_ddm_correlate_scratch(const DdmRdMapsLayout& layout,
+                                                                bool use_float,
+                                                                cudaStream_t stream) {
+  auto scratch = std::make_shared<DdmCorrelateScratch>();
+  constexpr const char* who = "ddm correlate scratch";
+  if (layout.num_range <= 0)
+    throw std::invalid_argument("ddm correlate: empty range axis");
+  const int64_t rows = checked_element_count<char>({layout.batch, layout.num_rx}, who);
+  const std::size_t element_bytes = use_float ? 8U : 16U;
+  const std::size_t per_range =
+      byte_span_elems(product_extents({rows, layout.num_doppler}, who), element_bytes, who);
+  scratch->tile_r = std::min<int64_t>(layout.num_range, static_cast<int64_t>(std::max<std::size_t>(
+                                                            1U, (32U * 1024 * 1024) / per_range)));
+  const int64_t batch = checked_element_count<char>({rows, scratch->tile_r}, who);
+  if (batch > std::numeric_limits<int>::max() ||
+      layout.num_doppler > std::numeric_limits<int>::max())
+    throw std::invalid_argument("ddm correlate: cuFFT dimensions exceed int range");
+  const size_t bytes =
+      byte_span_elems(product_extents({batch, layout.num_doppler}, who), element_bytes, who);
+  if (use_float)
+    scratch->ws_f.ensure(bytes, stream);
+  else
+    scratch->ws_d.ensure(bytes, stream);
+  scratch->plan.ensure(static_cast<int>(batch), static_cast<int>(layout.num_doppler), use_float,
+                       stream);
+  const int64_t tail = layout.num_range % scratch->tile_r;
+  if (tail != 0)
+    scratch->tail_plan.ensure(static_cast<int>(rows * tail), static_cast<int>(layout.num_doppler),
+                              use_float, stream);
+  return scratch;
+}
+
+std::size_t ddm_correlate_scratch_bytes(const DdmCorrelateScratch& scratch) {
+  std::size_t bytes = sizeof(scratch);
+  for (const auto cost :
+       {scratch.ws_f.bytes, scratch.ws_f.bytes, scratch.ws_d.bytes, scratch.ws_d.bytes,
+        scratch.plan.work_bytes, scratch.tail_plan.work_bytes}) {
+    if (cost > std::numeric_limits<std::size_t>::max() - bytes)
+      throw std::invalid_argument("ddm correlate: workspace byte count overflow");
+    bytes += cost;
   }
-  correlate_scratch_map().erase(owner);
+  return bytes;
 }
 
 template <typename T>
 void run_ddm_correlate_stage(const void* input, void* output, const DdmRdMapsLayout& layout,
-                             int64_t num_tx, const void* d_corr_weights, void* owner,
-                             cudaStream_t stream) {
+                             int64_t num_tx, const void* d_corr_weights,
+                             DdmCorrelateScratch& scratch, cudaStream_t stream) {
   const int64_t B = layout.batch;
   const int64_t Nrx = layout.num_rx;
   const int64_t D = layout.num_doppler;
@@ -842,25 +873,18 @@ void run_ddm_correlate_stage(const void* input, void* output, const DdmRdMapsLay
   const int64_t batch_rx = B * Nrx;
   const T inv_D = static_cast<T>(1.0) / static_cast<T>(D);
 
-  constexpr int64_t kTargetTileBytes = 32LL * 1024 * 1024;
-  const int64_t bytes_per_range = batch_rx * D * static_cast<int64_t>(sizeof(ComplexT));
-  int64_t tile_r = bytes_per_range > 0 ? (kTargetTileBytes / bytes_per_range) : R;
-  tile_r = std::max<int64_t>(1, std::min(R, tile_r));
+  const int64_t tile_r = scratch.tile_r;
 
   const auto* in = static_cast<const ComplexT*>(input);
   const auto* weights = static_cast<const ComplexT*>(d_corr_weights);
   auto* out_base = static_cast<ComplexT*>(output);
 
-  const size_t tile_bytes = static_cast<size_t>(batch_rx * tile_r * D) * sizeof(ComplexT);
-  CorrelateScratch& scratch = scratch_for(owner);
   ComplexT* d_yhat = nullptr;
   ComplexT* d_work = nullptr;
   if constexpr (sizeof(T) == 4) {
-    scratch.ws_f.ensure(tile_bytes, stream);
     d_yhat = scratch.ws_f.yhat;
     d_work = scratch.ws_f.work;
   } else {
-    scratch.ws_d.ensure(tile_bytes, stream);
     d_yhat = scratch.ws_d.yhat;
     d_work = scratch.ws_d.work;
   }
@@ -869,7 +893,9 @@ void run_ddm_correlate_stage(const void* input, void* output, const DdmRdMapsLay
   for (int64_t r0 = 0; r0 < R; r0 += tile_r) {
     const int64_t t = std::min(tile_r, R - r0);
     const int nbatch = static_cast<int>(batch_rx * t);
-    scratch.plan.ensure(nbatch, static_cast<int>(D), sizeof(T) == 4, stream);
+    const cufftHandle plan = (t == tile_r ? scratch.plan.plan : scratch.tail_plan.plan);
+    if (cufftSetStream(plan, stream) != CUFFT_SUCCESS)
+      throw std::runtime_error("ddm correlate: cufftSetStream failed");
 
     {
       if (batch_rx <= 65535 && (D + 31) / 32 <= 65535 && (t + 31) / 32 <= 2147483647LL) {
@@ -884,14 +910,14 @@ void run_ddm_correlate_stage(const void* input, void* output, const DdmRdMapsLay
         pack_rd_tile_kernel<T><<<grid, threads, 0, stream>>>(in, d_yhat, batch_rx, D, R, r0, t);
       }
     }
-    cufft_c2c<T>(scratch.plan.plan, d_yhat, CUFFT_FORWARD);
+    cufft_c2c<T>(plan, d_yhat, CUFFT_FORWARD);
 
     for (int64_t m = 0; m < num_tx; ++m) {
       const int mul_blocks = static_cast<int>(
           std::min<int64_t>(65535, (static_cast<int64_t>(nbatch) * D + kBlock - 1) / kBlock));
       mul_corr_weights_kernel<T>
           <<<mul_blocks, kBlock, 0, stream>>>(d_yhat, weights + m * D, d_work, nbatch, D, inv_D);
-      cufft_c2c<T>(scratch.plan.plan, d_work, CUFFT_INVERSE);
+      cufft_c2c<T>(plan, d_work, CUFFT_INVERSE);
 
       for (int64_t b = 0; b < B; ++b) {
         ComplexT* out_bm = out_base + ((b * num_tx + m) * Nrx * D * R);
@@ -918,11 +944,11 @@ void run_ddm_correlate_stage(const void* input, void* output, const DdmRdMapsLay
 
 template void run_ddm_correlate_stage<float>(const void* input, void* output,
                                              const DdmRdMapsLayout& layout, int64_t num_tx,
-                                             const void* d_corr_weights, void* owner,
-                                             cudaStream_t stream);
+                                             const void* d_corr_weights,
+                                             DdmCorrelateScratch& scratch, cudaStream_t stream);
 template void run_ddm_correlate_stage<double>(const void* input, void* output,
                                               const DdmRdMapsLayout& layout, int64_t num_tx,
-                                              const void* d_corr_weights, void* owner,
-                                              cudaStream_t stream);
+                                              const void* d_corr_weights,
+                                              DdmCorrelateScratch& scratch, cudaStream_t stream);
 
 }  // namespace holoscan::radar::detail

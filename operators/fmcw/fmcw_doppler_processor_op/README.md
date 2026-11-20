@@ -42,6 +42,7 @@ FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp → rd_map
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `doppler_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Slow-time window before the Doppler FFT; coherent-gain normalized when `coherent_gain_normalization` is true (WindowSpec default) Cost: Rebuilds cached window taps on an unseen spec, warning once. |
 | `center_zero_doppler` | bool | `true` | `[live]` Exact | Center DC on the Doppler axis; else bin 0 is DC Cost: Free (permute / `fftshift1D` choice). |
 | `waveform` | `FMCWWaveformDescriptor` | none (`is_valid() == false`) | `[live]` Exact via wire schema | Carrier → `λ`, PRI → PRF for the velocity axis Cost: Free for the FFT; required for `velocity_bins`. |

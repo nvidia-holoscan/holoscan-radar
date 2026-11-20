@@ -20,6 +20,7 @@ from unittest import mock
 import lxml.etree
 import numpy as np
 import sarkit.cphd as skcphd
+import subset_cphd as subset_cli
 from sar_data import subset
 
 
@@ -79,7 +80,8 @@ def range_server(payload):
     server.daemon_threads = True
     thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.02), daemon=True)
     thread.start()
-    source = subset.HttpByteSource(f"http://127.0.0.1:{server.server_port}/source.cphd")
+    origin = f"http://127.0.0.1:{server.server_port}"
+    source = subset.HttpByteSource(origin + "/source.cphd", allowed_source_origins=(origin,))
     try:
         yield source, state
     finally:
@@ -89,7 +91,103 @@ def range_server(payload):
         thread.join()
 
 
+class RemoteSourcePolicyTest(unittest.TestCase):
+    def test_recipe_cannot_approve_its_own_server_or_touch_existing_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe = root / "untrusted.yaml"
+            recipe.write_text(
+                json.dumps(
+                    {
+                        "name": "untrusted",
+                        "source": {"url": "http://127.0.0.1:1234/admin"},
+                        "allowed_source_origins": ["http://127.0.0.1:1234"],
+                    }
+                )
+            )
+            spec = subset.load_subset_recipe(recipe)
+            dest = root / "keep.cphd"
+            dest.write_bytes(b"keep output")
+            checkpoint = root / "keep.cphd.part.json"
+            checkpoint.write_bytes(b"keep checkpoint")
+            before = {p.name: p.read_bytes() for p in root.iterdir()}
+            for dry_run in (False, True):
+                with (
+                    self.subTest(dry_run=dry_run),
+                    mock.patch.object(subset.HttpByteSource, "_connect") as connect,
+                    self.assertRaisesRegex(ValueError, "not approved"),
+                ):
+                    try:
+                        subset.subset_cphd(spec.source, dest, force=True, dry_run=dry_run)
+                    finally:
+                        connect.assert_not_called()
+                self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, before)
+
+    def test_cli_requires_explicit_server_approval_and_then_preserves_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.cphd"
+            dest = Path(directory) / "subset.cphd"
+            values = make_cphd(source, None)
+            with range_server(source.read_bytes()) as (remote, state):
+                origin = f"http://127.0.0.1:{remote._port}"
+                command = [
+                    sys.executable,
+                    str(Path(subset_cli.__file__)),
+                    "--source",
+                    origin + "/source.cphd",
+                    "--samples",
+                    "2:6",
+                    "--connections",
+                    "2",
+                    "-o",
+                    str(dest),
+                ]
+                blocked = subprocess.run(command, capture_output=True, text=True, check=False)
+                self.assertNotEqual(blocked.returncode, 0)
+                self.assertIn("not approved", blocked.stderr)
+                self.assertEqual(state.requests, [])
+                self.assertFalse(dest.exists())
+                subprocess.run(
+                    command + ["--allow-source-origin", origin],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            with dest.open("rb") as handle, skcphd.Reader(handle) as reader:
+                np.testing.assert_array_equal(reader.read_signal("Primary"), values[:, 2:6])
+
+
 class HttpRangeTest(unittest.TestCase):
+    def test_oversized_response_body_is_read_with_a_bound_and_rejected(self):
+        source = subset.HttpByteSource(
+            "https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/input.cphd"
+        )
+        response = mock.Mock(status=206)
+        response.getheader.side_effect = lambda name, default=None: {
+            "Content-Range": "bytes 0-3/8",
+            "Content-Length": "5",
+        }.get(name, default)
+        response.read.return_value = b"abcde"
+        connection = mock.Mock()
+        connection.getresponse.return_value = response
+        with (
+            mock.patch.object(source, "_connection", return_value=connection),
+            mock.patch.object(source, "_drop"),
+            mock.patch.object(subset, "_FETCH_RETRIES", 1),
+            self.assertRaisesRegex(RuntimeError, "failed after 1"),
+        ):
+            source.read(0, 4)
+        response.read.assert_called_once_with(5)
+
+    def test_known_source_bounds_reject_before_request(self):
+        with range_server(b"abcdefgh") as (source, state):
+            self.assertEqual(source.size(), 8)
+            for offset, size in ((-1, 1), (0, -1), (8, 1), (0, 2**63)):
+                with self.subTest(offset=offset, size=size), self.assertRaises(RuntimeError):
+                    source.read(offset, size)
+            self.assertEqual([r[:2] for r in state.requests], [(0, 0)])
+            self.assertEqual(source.read(8, 0), b"")
+
     def test_transient_statuses_retry_the_same_range_and_honor_retry_after(self):
         for status in (408, 429, 500, 502, 503, 504):
             with self.subTest(status=status), range_server(b"abcdefgh") as (source, state):
@@ -136,6 +234,12 @@ class HttpRangeTest(unittest.TestCase):
 
 
 class ResumeTest(unittest.TestCase):
+    def test_resume_accepts_changed_transfer_size(self):
+        self.interrupt()
+        reads = self.download(io_chunk_bytes=16)
+        self.assertEqual(reads[0], (4 * 64 + 16, 16))
+        self.assertEqual(self.dest.read_bytes(), self.prefix + self.values[:, 2:6].tobytes())
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -147,11 +251,9 @@ class ResumeTest(unittest.TestCase):
         self.part = self.dest.with_suffix(".cphd.part")
         self.journal = self.dest.with_suffix(".cphd.part.json")
         self.prefix = b"test CPHD header and metadata\0"
-        patch = mock.patch.object(subset, "_SIGNAL_CHUNK_BYTES", 2 * 4 * 8)
-        patch.start()
-        self.addCleanup(patch.stop)
 
     def download(self, *, fail=False, force=False, source=None, **options):
+        options.setdefault("io_chunk_bytes", 64)
         source = source or subset.FileByteSource(self.source)
         original = source.read
         reads = []
@@ -371,6 +473,323 @@ def make_cphd(path, namespace):
     return values
 
 
+class IngestionBoundsTest(unittest.TestCase):
+    def test_doctypes_reject_without_external_resolution_or_output_changes(self):
+        parser_type = lxml.etree.XMLParser
+        resolutions = []
+
+        class RejectExternal(lxml.etree.Resolver):
+            def resolve(self, url, public_id, context):
+                resolutions.append(url)
+                raise AssertionError(f"unexpected XML resource lookup: {url}")
+
+        def parser_factory(**kwargs):
+            parser = parser_type(**kwargs)
+            parser.resolvers.add(RejectExternal())
+            return parser
+
+        declarations = (
+            "<!DOCTYPE CPHD>",
+            '<!DOCTYPE CPHD [<!ENTITY label "replacement">]>',
+            '<!DOCTYPE CPHD [<!ENTITY label SYSTEM "file:///aivo-probe">]>',
+            '<!DOCTYPE CPHD SYSTEM "https://example.invalid/aivo.dtd">',
+            '<!DOCTYPE CPHD [<!ENTITY % schema SYSTEM "file:///aivo-probe">%schema;]>',
+        )
+        for namespace in (None, "http://api.nsgreg.nga.mil/schema/cphd/1.1.0"):
+            for encoding in ("utf-8", "utf-16"):
+                for declaration in declarations:
+                    for force, dry_run in ((False, False), (True, False), (False, True)):
+                        with (
+                            self.subTest(
+                                namespace=namespace,
+                                encoding=encoding,
+                                declaration=declaration,
+                                force=force,
+                                dry_run=dry_run,
+                            ),
+                            tempfile.TemporaryDirectory() as directory,
+                        ):
+                            path = Path(directory) / "input.cphd"
+                            dest = Path(directory) / "out.cphd"
+                            make_cphd(path, namespace)
+                            data = bytearray(path.read_bytes())
+                            body = bytes(data[1024:4096]).rstrip(b"\0").decode()
+                            if "<!ENTITY label " in declaration:
+                                body = body.replace("UNRESTRICTED", "&label;")
+                            encoded = (
+                                f'<?xml version="1.0" encoding="{encoding}"?>'
+                                f"{declaration}{body}"
+                            ).encode(encoding)
+                            self.assertLess(len(encoded), 3072)
+                            data[1024:4096] = encoded.ljust(3072, b"\0")
+                            header = bytes(data[: data.index(b"\f") + 2]).decode()
+                            marker = "XML_BLOCK_SIZE := "
+                            start = header.index(marker) + len(marker)
+                            stop = header.index("\n", start)
+                            header = header[:start] + str(len(encoded)) + header[stop:]
+                            data[:1024] = header.encode().ljust(1024, b"\0")
+                            path.write_bytes(data)
+                            for existing in (
+                                dest,
+                                dest.with_suffix(".cphd.part"),
+                                dest.with_suffix(".subset.json"),
+                            ):
+                                existing.write_bytes(b"preserve existing output and resume state")
+                            before = {p.name: p.read_bytes() for p in Path(directory).iterdir()}
+                            with (
+                                mock.patch.object(
+                                    subset.lxml.etree, "XMLParser", side_effect=parser_factory
+                                ),
+                                self.assertRaisesRegex(RuntimeError, "DOCTYPE"),
+                            ):
+                                subset.subset_cphd(path, dest, force=force, dry_run=dry_run)
+                            self.assertEqual(
+                                {p.name: p.read_bytes() for p in Path(directory).iterdir()}, before
+                            )
+        self.assertEqual(resolutions, [])
+
+    def test_unsafe_recipe_names_fail_before_preparation_with_any_output(self):
+        names = (
+            "",
+            " ",
+            ".",
+            "..",
+            "../escape",
+            "nested/name",
+            "nested\\name",
+            "/tmp/escape",
+            "C:\\escape",
+            "C:escape",
+            "\0",
+            None,
+            123,
+            True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            recipe = Path(directory) / "recipe.yaml"
+            for name in names:
+                recipe.write_text(json.dumps({"name": name, "source": "unused.cphd"}))
+                for output in (Path(directory) / "output", Path(directory) / "explicit.cphd"):
+                    with (
+                        self.subTest(name=name, output=output),
+                        mock.patch("sys.argv", ["subset_cphd.py", str(recipe), "-o", str(output)]),
+                        mock.patch.object(subset_cli, "subset_cphd") as prepare,
+                        self.assertRaisesRegex(ValueError, "single filename component"),
+                    ):
+                        subset_cli.main()
+                    prepare.assert_not_called()
+            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ["recipe.yaml"])
+
+    def test_safe_recipe_name_preserves_explicit_output_selection(self):
+        output = Path("chosen") / "directory"
+        explicit = Path("another") / "chosen.cphd"
+        for name in ("houston_1p0m", "scene with spaces", "échantillon-01"):
+            with self.subTest(name=name):
+                self.assertEqual(subset_cli._output_path(output, name), output / f"{name}.cphd")
+                self.assertEqual(subset_cli._output_path(explicit, name), explicit)
+
+    def test_recipe_chunk_size_and_cli_override_precedence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            recipe = Path(directory) / "recipe.yaml"
+            recipe.write_text("name: example\nsource: unused.cphd\nio_chunk_bytes: 32\n")
+            self.assertEqual(subset.load_subset_recipe(recipe).io_chunk_bytes, 32)
+            for extra, expected in (([], 32), (["--io-chunk-bytes", "16"], 16)):
+                with (
+                    self.subTest(extra=extra),
+                    mock.patch(
+                        "sys.argv", ["subset_cphd.py", str(recipe), "-o", directory, *extra]
+                    ),
+                    mock.patch.object(
+                        subset_cli, "subset_cphd", return_value=SimpleNamespace(dry_run=False)
+                    ) as prepare,
+                ):
+                    self.assertEqual(subset_cli.main(), 0)
+                self.assertEqual(prepare.call_args.kwargs["io_chunk_bytes"], expected)
+            recipe.write_text("name: example\nsource: unused.cphd\nio_chunk_bytes: 9\n")
+            with self.assertRaisesRegex(ValueError, "io_chunk_bytes"):
+                subset.load_subset_recipe(recipe)
+
+    def test_invalid_chunk_sizes_fail_before_opening_source(self):
+        for value in (0, -8, 1, 7, 9, True, 16.0, 2**64):
+            with (
+                self.subTest(value=value),
+                mock.patch.object(subset, "open_source") as open_source,
+                self.assertRaisesRegex(ValueError, "io_chunk_bytes"),
+            ):
+                subset.subset_cphd("unopened.cphd", "unwritten.cphd", io_chunk_bytes=value)
+            open_source.assert_not_called()
+
+    def test_channel_pvp_offset_and_block_padding_preserve_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path, dest = Path(directory) / "input.cphd", Path(directory) / "out.cphd"
+            values = make_cphd(path, None)
+            data = bytearray(path.read_bytes())
+            records = bytes(data[4096:4288])
+            data[4104:4296] = records
+            data = data.replace(b"PVP_BLOCK_SIZE := 192", b"PVP_BLOCK_SIZE := 512")
+            data = data.replace(b"<PVPArrayByteOffset>0", b"<PVPArrayByteOffset>8")
+            path.write_bytes(data)
+            source = subset.FileByteSource(path)
+            with (
+                mock.patch.object(subset, "open_source", return_value=source),
+                mock.patch.object(source, "read", wraps=source.read) as read,
+            ):
+                subset.subset_cphd(path, dest)
+            self.assertIn(mock.call(4104, 192), read.call_args_list)
+            self.assertNotIn(mock.call(4096, 512), read.call_args_list)
+            with dest.open("rb") as handle, skcphd.Reader(handle) as reader:
+                np.testing.assert_array_equal(reader.read_signal("Primary"), values)
+
+    def test_metadata_bounds_fail_before_large_reads_or_output_changes(self):
+        cases = (
+            ("XML_BLOCK_SIZE := ", "8589934592", None, None),
+            ("PVP_BLOCK_SIZE := ", "16", None, None),
+            ("SIGNAL_BLOCK_SIZE := ", "8", None, None),
+            (None, None, "NumBytesPVP", "34359738368"),
+            (None, None, "NumVectors", "9223372036854775807"),
+            (None, None, "NumSamples", "-1"),
+            (None, None, "NumVectors", "0"),
+            (None, None, "PVP/TxTime/Offset", "9223372036854775807"),
+            (None, None, "PVP/TxTime/Size", "-1"),
+            (None, None, "PVPArrayByteOffset", "-1"),
+            (None, None, "SignalArrayByteOffset", "9223372036854775807"),
+        )
+        for marker, value, tag, text in cases:
+            with self.subTest(tag=tag, marker=marker), tempfile.TemporaryDirectory() as directory:
+                source_path, dest = Path(directory) / "input.cphd", Path(directory) / "out.cphd"
+                make_cphd(source_path, None)
+                data = bytearray(source_path.read_bytes())
+                header = bytes(data[: data.index(b"\f") + 2]).decode()
+                if tag is not None:
+                    xml = lxml.etree.fromstring(bytes(data[1024:4096]).rstrip(b"\0"))
+                    xml.find(f".//{tag}").text = text
+                    encoded = lxml.etree.tostring(xml)
+                    data[1024:4096] = encoded.ljust(3072, b"\0")
+                    marker, value = "XML_BLOCK_SIZE := ", str(len(encoded))
+                start = header.index(marker) + len(marker)
+                stop = header.index("\n", start)
+                header = header[:start] + value + header[stop:]
+                data[:1024] = header.encode().ljust(1024, b"\0")
+                source_path.write_bytes(data)
+                source = subset.FileByteSource(source_path)
+                self.addCleanup(source.close)
+                with (
+                    mock.patch.object(subset, "open_source", return_value=source),
+                    mock.patch.object(source, "read", wraps=source.read) as read,
+                    self.assertRaises(RuntimeError),
+                ):
+                    subset.subset_cphd(source_path, dest)
+                self.assertLessEqual(max(call.args[1] for call in read.call_args_list), 65536)
+                self.assertFalse(dest.exists())
+                self.assertFalse(dest.with_suffix(".cphd.part").exists())
+
+    def test_support_array_bounds_and_format_checked_before_read(self):
+        for rows, columns, element_bytes, fmt in (
+            (1048576, 1048576, 8, "F8"),
+            (1, 1, 4, "F8"),
+            (-1, 1, 8, "F8"),
+        ):
+            with self.subTest(rows=rows, element_bytes=element_bytes):
+                xml = lxml.etree.fromstring(
+                    f"<CPHD><Data><SupportArray><Identifier>x</Identifier>"
+                    f"<NumRows>{rows}</NumRows><NumCols>{columns}</NumCols>"
+                    f"<BytesPerElement>{element_bytes}</BytesPerElement>"
+                    "<ArrayByteOffset>0</ArrayByteOffset></SupportArray></Data>"
+                    f"<SupportArray><IAZArray><Identifier>x</Identifier><ElementFormat>{fmt}"
+                    "</ElementFormat></IAZArray></SupportArray></CPHD>"
+                ).getroottree()
+                source = mock.Mock()
+                source.size.return_value = 4096
+                with self.assertRaises(RuntimeError):
+                    subset._read_support_arrays(
+                        source,
+                        xml,
+                        {"SUPPORT_BLOCK_BYTE_OFFSET": "0", "SUPPORT_BLOCK_SIZE": "4096"},
+                    )
+                source.read.assert_not_called()
+
+    def test_wide_rows_are_split_and_only_complete_rows_checkpointed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path, dest = root / "source.bin", root / "out.cphd"
+            values = np.asarray(np.arange(32).reshape(4, 8) + 0.5j, dtype=">c8")
+            source_path.write_bytes(values.tobytes())
+
+            def download(interrupt):
+                source = subset.FileByteSource(source_path)
+                original = source.read
+                reads = []
+
+                def read(offset, size):
+                    reads.append((offset, size))
+                    if interrupt and offset == 80:
+                        raise RuntimeError("interrupted inside row")
+                    return original(offset, size)
+
+                try:
+                    with (
+                        tempfile.TemporaryFile() as prefix,
+                        mock.patch.object(source, "read", side_effect=read),
+                    ):
+                        prefix.write(b"prefix")
+                        prefix.flush()
+                        subset._download_signal(
+                            dest,
+                            source_path,
+                            source,
+                            prefix,
+                            6,
+                            pulses=(0, 4),
+                            samples=(0, 8),
+                            force=False,
+                            signal_block=0,
+                            channel_offset=0,
+                            orig_num_samples=8,
+                            pulse_start=0,
+                            num_vectors=4,
+                            sample_start=0,
+                            num_samples=8,
+                            connections=2,
+                            io_chunk_bytes=16,
+                        )
+                finally:
+                    source.close()
+                return reads
+
+            with self.assertRaisesRegex(RuntimeError, "interrupted inside row"):
+                download(True)
+            state = json.loads(dest.with_suffix(".cphd.part.json").read_text())
+            self.assertEqual(state["written_vectors"], 1)
+            reads = download(False)
+            self.assertEqual(reads[0], (64, 16))
+            self.assertTrue(all(size <= 16 for _, size in reads))
+            self.assertEqual(dest.read_bytes(), b"prefix" + values.tobytes())
+
+    def test_short_remote_header_probe_is_clamped_to_source(self):
+        with range_server(b"CPHD/1.1.0\n\f\n") as (source, state):
+            with self.assertRaisesRegex(RuntimeError, "header missing"):
+                subset._read_header(source)
+            self.assertEqual([r[:2] for r in state.requests], [(0, 0), (0, len(state.data) - 1)])
+
+    def test_support_array_exact_boundary_preserves_values(self):
+        xml = lxml.etree.fromstring(
+            "<CPHD><Data><SupportArray><Identifier>x</Identifier><NumRows>2</NumRows>"
+            "<NumCols>2</NumCols><BytesPerElement>8</BytesPerElement>"
+            "<ArrayByteOffset>0</ArrayByteOffset></SupportArray></Data>"
+            "<SupportArray><IAZArray><Identifier>x</Identifier><ElementFormat>F8</ElementFormat>"
+            "</IAZArray></SupportArray></CPHD>"
+        ).getroottree()
+        expected = np.asarray([[1, 2], [3, 4]], dtype=">f8")
+        source = mock.Mock()
+        source.size.return_value = 132
+        source.read.return_value = expected.tobytes()
+        result = subset._read_support_arrays(
+            source, xml, {"SUPPORT_BLOCK_BYTE_OFFSET": "100", "SUPPORT_BLOCK_SIZE": "32"}
+        )
+        source.read.assert_called_once_with(100, 32)
+        np.testing.assert_array_equal(result["x"], expected)
+
+
 class SubsetFileTest(unittest.TestCase):
     def test_real_writer_resumes_with_stable_padded_pvp_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -383,14 +802,11 @@ class SubsetFileTest(unittest.TestCase):
                     raise RuntimeError("interrupted")
                 return original(reader, offset, size)
 
-            with (
-                mock.patch.object(subset, "_validate_xmltree"),
-                mock.patch.object(subset, "_SIGNAL_CHUNK_BYTES", 64),
-            ):
+            with (mock.patch.object(subset, "_validate_xmltree"),):
                 with mock.patch.object(subset.FileByteSource, "read", fail):
                     with self.assertRaisesRegex(RuntimeError, "interrupted"):
-                        subset.subset_cphd(source, dest, samples=(2, 6))
-                subset.subset_cphd(source, dest, samples=(2, 6))
+                        subset.subset_cphd(source, dest, samples=(2, 6), io_chunk_bytes=64)
+                subset.subset_cphd(source, dest, samples=(2, 6), io_chunk_bytes=128)
             with dest.open("rb") as handle, skcphd.Reader(handle) as reader:
                 np.testing.assert_array_equal(reader.read_signal("Primary"), values[:, 2:6])
 
@@ -444,17 +860,29 @@ class SubsetFileTest(unittest.TestCase):
             with range_server(source.read_bytes()) as (http_source, state):
                 url = f"http://127.0.0.1:{http_source._port}/source.cphd"
                 state.fail_from = 8192 + 4 * 64
-                with (
-                    mock.patch.object(subset, "_SIGNAL_CHUNK_BYTES", 64),
-                    mock.patch.object(subset, "_FETCH_RETRIES", 1),
-                ):
+                with (mock.patch.object(subset, "_FETCH_RETRIES", 1),):
                     with self.assertRaisesRegex(RuntimeError, "after 1 tries"):
-                        subset.subset_cphd(url, dest, samples=(2, 6), connections=2)
+                        subset.subset_cphd(
+                            url,
+                            dest,
+                            samples=(2, 6),
+                            connections=2,
+                            io_chunk_bytes=64,
+                            allowed_source_origins=(f"http://127.0.0.1:{http_source._port}",),
+                        )
                     state.fail_from = None
                     state.requests.clear()
                     output = io.StringIO()
                     with contextlib.redirect_stderr(output):
-                        subset.subset_cphd(url, dest, samples=(2, 6), progress=True, connections=2)
+                        subset.subset_cphd(
+                            url,
+                            dest,
+                            samples=(2, 6),
+                            progress=True,
+                            connections=2,
+                            io_chunk_bytes=128,
+                            allowed_source_origins=(f"http://127.0.0.1:{http_source._port}",),
+                        )
                 self.assertIn("4/6 vectors checkpointed", output.getvalue())
                 signal_reads = [start for start, _end, _etag in state.requests if start >= 8192]
                 self.assertEqual(sorted(signal_reads), [8192 + i * 64 + 16 for i in (4, 5)])

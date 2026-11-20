@@ -60,6 +60,14 @@ conceded earlier for one field. `TGeom` may not be coarser than `T`.
 | `playback_rate` | `double` | 0 | Static | `0` unmetered (wait on full); `>0` pace by TxTime |
 | `duty_cycle` | `double` | 1 | Static | Gap between collections |
 | `wait_for_downstream` | `bool` | false | Static | Paced ingest waits on full queues |
+| `io_chunk_bytes` | `int64` | 67108864 | Static | Read request limit per I/O worker; at least 8, multiple of 8 |
+
+`io_chunk_bytes` is a static integer parameter, default `67108864` (64 MiB),
+with minimum 8 and a multiple-of-8 requirement. For example, set
+`cphd_reader.io_chunk_bytes: 16777216` in application YAML for 16 MiB reads.
+It limits each filesystem request per I/O worker; it does not resize ticks
+or bound total ingest memory. The same parameter works through the Python
+provider. Changing it requires rebuilding the Graph.
 
 ## Decode and timing
 
@@ -79,6 +87,17 @@ with the existing H2D completion synchronization. It performs no file reads.
 The current batch emits ASAP, then its accumulated collect-time deadline gates
 the next batch's promotion.
 First-batch publication does not wait for its own end `TxTime`.
+
+Before allocating a PVP result, signal result, or decode scratch, the host
+reader checks size/offset arithmetic and verifies the requested bytes against
+the open file and the declared block size when present. Signal checks apply
+to the requested span, so a truncated collection can still emit its valid
+leading batches. Missing block-size headers in minimal fixtures remain
+supported; XML dimensions determine each request, bounded by the file.
+Individual filesystem reads are at most `io_chunk_bytes` (64 MiB by default),
+without changing tick sizes.
+These are format and allocation checks, not a memory budget: valid large XML,
+PVP records, and decoded tick outputs still require proportional memory.
 
 The worker may read across file seams and loop wraps during playback or quiet
 time. Only promotion starts a collection's HUD dwell and updates playback;
@@ -162,6 +181,30 @@ uses the C++ fixture generator. The CPHD reader C++ tests cover decoding,
 selection, boundaries, and malformed inputs. Real-collection validation is
 tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md); see
 [SAR data preparation](../../../tools/sar_data/README.md).
+
+## Ingestion hardening measurements
+
+On 2026-11-19, compared the hardened host parser with `e1ae6390` on GB10
+(aarch64, local NVMe/ext4, SDK-image g++ 13.3, `-O3`). Each case used seven
+alternating baseline/hardened process pairs after warmup, with 16 passes over
+a warm-cache prefix of at least 1 GiB per timed process. Both variants decoded
+the six geometry/axis PVP fields and read the same CF8 signal bytes.
+These measurements used the 64 MiB default before exposing `io_chunk_bytes`.
+
+| Case | Median paired elapsed-time change |
+| --- | --- |
+| Kourou, 100 / 1024 / 3181 pulses per batch | +0.5% / -1.6% / -2.2% |
+| Atlanta, 100 / 1024 / 3181 pulses per batch | -0.2% / +0.8% / +2.8% |
+| Houston, 1024 pulses per batch | -1.0% |
+| Kourou, one pulse per batch (stress case) | +39.6% |
+
+Positive means slower. Ordinary-batch changes are small and variable; these
+results do not establish a universal throughput improvement or regression.
+The one-pulse case adds roughly 3 microseconds per tick and exposes the cost
+of repeated file-size queries. This measures host ingestion only: output
+allocation, GPU upload/decode, and downstream Graph work are excluded. No
+cold-cache or storage-limited throughput claim is made. Python preparation
+measurements and their write-side tradeoff are recorded in the data-tool guide.
 
 ## Scheduling and prefetch measurements
 

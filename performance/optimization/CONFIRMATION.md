@@ -92,7 +92,13 @@ python3 performance/optimization/radar_perf.py inspect-confirmation \
 Freeze candidate manifests and settings before confirmation. The collector seals
 order, seed, plan, screening identities and freeze time before measured launches.
 It checks artifact/runtime hashes, fresh process receipts, context and raw frames,
-serializes per-device jobs, and cleans up owned processes/containers. Resume
+serializes per-device jobs for the current user, and cleans up owned
+processes/containers. Locks coordinate that user's runs across working directories
+under the same temporary root. Each user has a private, ownership-checked
+0700 directory with 0600 regular lock files; symlinks, hard links, and unsafe
+owners or permissions are rejected. Lock files remain after release to preserve
+inode identity. Different users are not serialized; shared GPU scheduling is a
+host policy. Resume
 uses the same output directory, verified completed units and the original freeze;
 unsealed outputs require quarantine, not invented receipts. An explicit total
 session budget bounds both screening and confirmation.

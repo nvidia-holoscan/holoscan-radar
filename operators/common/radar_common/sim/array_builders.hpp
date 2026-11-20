@@ -20,6 +20,7 @@
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/math/checked_sizes.hpp"
 #include "radar_common/sim/scene.hpp"
 
 namespace holoscan::radar::sim {
@@ -34,7 +35,8 @@ inline ArrayGeometry make_ura_geometry(int64_t az_elements, int64_t el_elements,
   ArrayGeometry geom;
   geom.wavelength = wavelength;
   geom.geometry_type = ArrayGeometryType::kUra;
-  geom.element_positions.reserve(static_cast<size_t>(az_elements * el_elements * 3));
+  geom.element_positions.reserve(static_cast<size_t>(
+      checked_element_count<double>({az_elements, el_elements, 3}, "make_ura_geometry")));
   for (int64_t iz = 0; iz < el_elements; ++iz) {
     for (int64_t iy = 0; iy < az_elements; ++iy) {
       geom.element_positions.push_back(0.0);
@@ -52,7 +54,8 @@ inline ArrayGeometry make_ura_geometry(int64_t az_elements, int64_t el_elements,
 inline std::vector<Vec3> make_ura_rx_positions(int64_t az_elements, int64_t el_elements,
                                                double spacing_wl, double wavelength) {
   std::vector<Vec3> positions;
-  positions.reserve(static_cast<size_t>(az_elements * el_elements));
+  positions.reserve(static_cast<size_t>(
+      checked_element_count<Vec3>({az_elements, el_elements}, "make_ura_rx_positions")));
   for (int64_t iz = 0; iz < el_elements; ++iz) {
     for (int64_t iy = 0; iy < az_elements; ++iy) {
       positions.push_back(Vec3{0.0, static_cast<double>(iy) * spacing_wl * wavelength,
@@ -73,7 +76,8 @@ inline ArrayGeometry make_virtual_geometry(const std::vector<Vec3>& tx_positions
   geom.geometry_type = ArrayGeometryType::kConformal;
   const int64_t num_tx = static_cast<int64_t>(tx_positions.size());
   const int64_t num_rx = static_cast<int64_t>(rx_positions.size());
-  geom.element_positions.reserve(static_cast<size_t>(num_tx * num_rx * 3));
+  geom.element_positions.reserve(static_cast<size_t>(
+      checked_element_count<double>({num_tx, num_rx, 3}, "make_virtual_geometry")));
   for (int64_t tx = 0; tx < num_tx; ++tx) {
     for (int64_t rx = 0; rx < num_rx; ++rx) {
       const Vec3& tp = tx_positions[static_cast<size_t>(tx)];
@@ -92,7 +96,8 @@ inline ArrayGeometry make_virtual_geometry(const std::vector<Vec3>& tx_positions
 inline std::vector<Vec3> make_linear_positions(int64_t count, double spacing_wl,
                                                double wavelength) {
   std::vector<Vec3> positions;
-  positions.reserve(static_cast<size_t>(count));
+  positions.reserve(
+      static_cast<size_t>(checked_element_count<Vec3>({count}, "make_linear_positions")));
   for (int64_t i = 0; i < count; ++i) {
     positions.push_back(Vec3{0.0, static_cast<double>(i) * spacing_wl * wavelength, 0.0});
   }
@@ -103,7 +108,11 @@ inline std::vector<Vec3> make_linear_positions(int64_t count, double spacing_wl,
 // for VirtualArrayAssemblyOp's tx_positions / rx_positions parameters.
 inline std::vector<double> flatten_positions(const std::vector<Vec3>& positions) {
   std::vector<double> flat;
-  flat.reserve(positions.size() * 3);
+  if (positions.empty()) {
+    return flat;
+  }
+  flat.reserve(static_cast<size_t>(checked_element_count<double>(
+      {static_cast<int64_t>(positions.size()), 3}, "flatten_positions")));
   for (const Vec3& p : positions) {
     flat.push_back(p[0]);
     flat.push_back(p[1]);

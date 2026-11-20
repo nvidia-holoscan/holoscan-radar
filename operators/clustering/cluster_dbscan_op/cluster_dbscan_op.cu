@@ -148,7 +148,8 @@ expected<ClusterDBSCANStageConfig, Error> resolve_params(Input<Tensor>& epsilon,
 
 template <typename T>
 expected<ClusterDBSCANStagePlan, Error> build_cluster_stage_plan(const Tensor& points,
-                                                                 ClusterDBSCANStageConfig stage) {
+                                                                 ClusterDBSCANStageConfig stage,
+                                                                 int64_t max_points) {
   try {
     require_cuda_accessible(points, "points", kOpName);
     require_contiguous(points, "points", kOpName);
@@ -165,6 +166,12 @@ expected<ClusterDBSCANStagePlan, Error> build_cluster_stage_plan(const Tensor& p
   }
   const int64_t num_points = shape[0];
   const int64_t num_features = shape[1];
+  if (num_points > max_points) {
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 "ClusterDBSCANOp: num_points " + std::to_string(num_points) +
+                                     " exceeds MaxTensorExtents.max_points " +
+                                     std::to_string(max_points)});
+  }
   if (num_features < 1) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, "ClusterDBSCANOp: num_features must be >= 1"});
@@ -468,6 +475,7 @@ template <typename T>
 ClusterDBSCANOp<T>::ClusterDBSCANOp(const MaxTensorExtents& extents) {
   const char* who = "ClusterDBSCANOp";
   const std::int64_t max_points = require_extent(extents.max_points, "max_points", who);
+  max_points_ = max_points;
   const std::int64_t max_clusters = require_extent(extents.max_clusters, "max_clusters", who);
   max_features_ = extents.max_features.value_or(0);
   // labels: int64 (max_points,)
@@ -528,7 +536,7 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
 
   // Validate shape/dtype and derive tick geometry.
   // Build and validate the bounded execution plan for this input shape.
-  HOLOSCAN_TRY(auto plan, (build_cluster_stage_plan<T>(points_in, std::move(stage))));
+  HOLOSCAN_TRY(auto plan, (build_cluster_stage_plan<T>(points_in, std::move(stage), max_points_)));
   const int64_t num_points = plan.num_points;
 
   // Select the activation's CUDA stream.

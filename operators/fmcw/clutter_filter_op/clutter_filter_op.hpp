@@ -19,6 +19,7 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 
+#include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
@@ -57,10 +58,14 @@ struct ClutterStageState;  // kernel-side caches; defined in clutter_stage.hpp
 struct ClutterFilterParams {
   ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
   WindowSpec doppler_window{};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    ClutterFilterParams, holoscan::param_schema("com.nvidia.holoscan.radar.ClutterFilterParams", 2),
+    ClutterFilterParams, holoscan::param_schema("com.nvidia.holoscan.radar.ClutterFilterParams", 3),
+    holoscan::field<&ClutterFilterParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&ClutterFilterParams::method>("method").description(
         "Slow-time clutter suppression {none, mean_subtraction, single_delay, "
         "double_delay}: none is pass-through; mean_subtraction nulls "
@@ -102,6 +107,8 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
   Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   // Keep the previous activation's input alive across ticks so async device
   // reads cannot outlive the buffer.
   Tensor retained_input_;

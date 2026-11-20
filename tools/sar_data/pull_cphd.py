@@ -42,7 +42,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
+from sar_data.integrity import verify_metadata_file
+from sar_data.network import open_source_url, validate_source_url
 from sar_data.progress import DownloadProgress
+from sar_data.recipe import validate_recipe_name
 
 UMBRA_BUCKET = "umbra-open-data-catalog"
 UMBRA_HTTPS = f"https://{UMBRA_BUCKET}.s3.us-west-2.amazonaws.com/"
@@ -178,7 +181,7 @@ def dataset_catalog() -> dict[Path, Dataset]:
             spec["source"]["key"],
             spec["source"]["bucket"],
             UMBRA_HTTPS,
-            Path("sar") / f"{spec['name']}.cphd",
+            Path("sar") / f"{validate_recipe_name(spec['name'])}.cphd",
             recipe=recipe,
         )
     )
@@ -406,7 +409,9 @@ def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
     return list(jobs.values())
 
 
-def prepare_one(job: PullJob, force: bool, index: int, total: int) -> Path:
+def prepare_one(
+    job: PullJob, force: bool, index: int, total: int, io_chunk_bytes: int | None = None
+) -> Path:
     if job.recipe is None:
         return pull_one(job, force, index, total)
     command = (["uv", "run"] if shutil.which("uv") else [sys.executable]) + [
@@ -419,6 +424,8 @@ def prepare_one(job: PullJob, force: bool, index: int, total: int) -> Path:
     ]
     if force:
         command.append("--force")
+    if io_chunk_bytes is not None:
+        command.extend(["--io-chunk-bytes", str(io_chunk_bytes)])
     subprocess.run(command, check=True)
     return job.destination
 
@@ -443,9 +450,10 @@ def content_length(headers: object) -> int | None:
 
 
 def https_size(url: str) -> int | None:
+    validate_source_url(url)
     request = urllib.request.Request(url, method="HEAD")
     try:
-        with urllib.request.urlopen(request, timeout=HTTPS_TIMEOUT_S) as response:
+        with open_source_url(request, timeout=HTTPS_TIMEOUT_S) as response:
             return content_length(response.headers)
     except (OSError, urllib.error.URLError, ValueError):
         return None
@@ -483,6 +491,7 @@ def partial_path(dest: Path) -> Path:
 
 
 def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
+    validate_source_url(url)
     dest.parent.mkdir(parents=True, exist_ok=True)
     partial = partial_path(dest)
     if partial.exists():
@@ -490,7 +499,7 @@ def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
     progress.start()
     try:
         with (
-            urllib.request.urlopen(url, timeout=HTTPS_TIMEOUT_S) as response,
+            open_source_url(url, timeout=HTTPS_TIMEOUT_S) as response,
             partial.open("wb") as out,
         ):
             expected_bytes = content_length(response.headers)
@@ -511,6 +520,7 @@ def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
                 )
         if progress.total is None:
             progress.total = received_bytes
+        verify_metadata_file(partial, url)
         partial.replace(dest)
         progress.finish()
     except BaseException:
@@ -562,6 +572,7 @@ def download_aws(bucket: str, key: str, dest: Path, progress: DownloadProgress) 
             raise RuntimeError(f"aws s3 cp produced no file at {partial}")
         progress.total = partial.stat().st_size
         progress.set(progress.total)
+        verify_metadata_file(partial, uri)
         partial.replace(dest)
         progress.finish()
     except BaseException:
@@ -576,6 +587,7 @@ def pull_one(job: PullJob, force: bool, index: int, count: int) -> Path:
     label = f"[{index}/{count}] {job.scene}"
     if dest.is_file() and not force:
         print(f"Validation {label}: checking existing CPHD", file=sys.stderr, flush=True)
+        verify_metadata_file(dest, f"s3://{job.bucket}/{job.key}")
         if cphd_readable(dest):
             print(f"Skipped {label}: {dest.name} already present", file=sys.stderr, flush=True)
             return dest
@@ -661,7 +673,17 @@ def main() -> int:
         action="store_true",
         help="re-download existing files and restart partial subsets",
     )
+    parser.add_argument(
+        "--io-chunk-bytes",
+        type=int,
+        default=None,
+        help="override recipe signal staging/transfer bytes for subset preparation",
+    )
     args = parser.parse_args()
+    if args.io_chunk_bytes is not None and (
+        args.io_chunk_bytes < 8 or args.io_chunk_bytes % 8 or args.io_chunk_bytes > sys.maxsize
+    ):
+        parser.error("--io-chunk-bytes must be at least 8, a multiple of 8, and addressable")
     if args.config is not None and args.dest is not None:
         parser.error("--config uses exact configured paths; use --data-root instead of --dest")
     if args.data_root is not None and args.config is None:
@@ -691,7 +713,8 @@ def main() -> int:
     count = len(jobs)
     for index, job in enumerate(jobs, start=1):
         try:
-            pulled.append((job, prepare_one(job, args.force, index, count)))
+            options = {} if args.io_chunk_bytes is None else {"io_chunk_bytes": args.io_chunk_bytes}
+            pulled.append((job, prepare_one(job, args.force, index, count, **options)))
         except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
             print(
                 f"error: {job.scene}: download failed: {exc}\n"

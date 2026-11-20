@@ -65,3 +65,41 @@ supply a preset, so use `default` when selecting a different file. Existing
 `build_graph(path)` API accepts the same inherited or standalone files. All
 shipped presets and bases are staged together beside the C++ executable, so
 relative inheritance also works from the build tree.
+
+## MIMO source memory allowance
+
+The MIMO TDM, DDM, adaptive AoA and multi-waveform examples use a shared
+source preflight in both C++ and Python. Set a positive byte allowance in YAML:
+
+```yaml
+app:
+    max_source_working_bytes: 536870912  # Default 512 MiB; raise or lower as needed
+```
+
+Oversized configurations fail before geometry construction or simulation.
+Every multi-waveform profile is checked independently, including later profiles.
+
+The conservative logical payload estimate for one synthesis is
+`24*R*L*S + 80*R*L + 16*T*L + 64*S + 24*T*R + 48*(T+R)` bytes,
+plus `8*L` for a TDM transmit pattern. Here `T` is the TX count,
+`R = az_elements * el_elements`, `S` is samples per chirp, and
+`L = T * num_chirps` for TDM (`num_chirps` is per TX), or
+`L = num_chirps` for DDM. Profile configs use `chirps_per_tx` for TDM.
+The terms cover the float-complex output and double-complex accumulator,
+host/device synthesis scratch and upload conversion, excitation weights,
+sample/reference arrays, virtual positions, and scene/flattened antenna positions.
+Scratch terms are conservatively summed even when lifetimes do not overlap.
+
+For the shipped 2-TX, 16-RX, 128-slot, 256-sample configuration the estimate
+is about 12.2 MiB; the 512-sample profile is about 24.2 MiB. These are
+source payload estimates, not measured process peaks. The allowance excludes
+allocator reservations, retained/queued frames, generated or authored DDM code
+descriptors and their copies, target/config storage, graph Tensor pools,
+FFT/library caches, downstream operators and visualization. Frame count affects
+run duration and does not multiply this single-synthesis estimate.
+It does not limit general library simulator or operator APIs.
+
+YAML can raise its own allowance, so this guard catches accidental oversized
+workloads rather than enforcing a boundary against hostile configuration files.
+The separate DDM generated-table allowance is documented in
+[the DDM example](mimo_ddm/README.md#configurations).

@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <array>
 #include <chrono>
 #include <complex>
@@ -352,6 +353,13 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(ExecutionContext& cont
     return make_unexpected(
         Error{ErrorCode::kNotSupported, "TDMSparseCompensationOp: no CUDA compute stream"});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  correction_cache_.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(
+      *cache_budget_, context.params<TDMSparseCompensationParams>().cache_budget_bytes, [] {
+        cudaDeviceSynchronize();
+      });
+
   HOLOSCAN_TRY(ensure_virtual_tables(plan.virtual_plan, plan.stage.tx_positions,
                                      plan.stage.rx_positions, stream));
 

@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "radar_common/math/constants.hpp"
+#include "radar_common/math/checked_sizes.hpp"
 #include "radar_common/tensor/detail/matx_views.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -253,6 +254,7 @@ std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene, cudaStream
   const int64_t num_chirps = scene.num_chirps;
   const int64_t samples = scene.samples_per_chirp;
 
+  (void)checked_element_count<std::complex<double>>({num_rx, num_chirps, samples}, "simulate_gpu");
   const std::vector<int64_t> shape = (num_rx == 1)
                                          ? std::vector<int64_t>{num_chirps, samples}
                                          : std::vector<int64_t>{num_rx, num_chirps, samples};
@@ -309,7 +311,11 @@ std::shared_ptr<holoscan::Tensor> simulate_mimo_gpu(
   if (slow_time <= 0) {
     throw std::invalid_argument("simulate_mimo_gpu: slow_time must be positive");
   }
-  if (static_cast<int64_t>(weights.size()) != num_tx * slow_time) {
+  const int64_t weight_count =
+      checked_element_count<std::complex<double>>({num_tx, slow_time}, "simulate_mimo_gpu weights");
+  (void)checked_element_count<std::complex<double>>({num_rx, slow_time, samples},
+                                                    "simulate_mimo_gpu accumulator");
+  if (static_cast<int64_t>(weights.size()) != weight_count) {
     throw std::invalid_argument("simulate_mimo_gpu: weights must be (num_tx * slow_time)");
   }
 

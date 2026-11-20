@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <iterator>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -40,6 +42,7 @@
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/dsp/virtual_array.hpp"
 #include "radar_common/math/uniform_grid.hpp"
+#include "radar_common/math/checked_sizes.hpp"
 #include "radar_common/sim/array_builders.hpp"
 #include "radar_common/sim/scene.hpp"
 #include "radar_app/fmcw/mimo_config_schema.hpp"
@@ -55,6 +58,35 @@ using config::reject_authored;
 using config::require_finite_positive;
 using config::require_positive;
 using config::validate_frame_period;
+
+// Conservative logical payload estimate for one source synthesis, not a bound
+// on allocator reservations, queued frames, code descriptors or graph pools.
+inline void validate_source_working_bytes(int64_t num_tx, int64_t num_rx, int64_t slow_time,
+                                          int64_t samples, bool tdm, int64_t allowance) {
+  require_positive("app.max_source_working_bytes", allowance);
+  int64_t remaining = allowance;
+  const auto charge = [&remaining](int64_t count, int64_t bytes) {
+    if (count > remaining / bytes) {
+      throw std::runtime_error(
+          "estimated MIMO source working memory exceeds app.max_source_working_bytes; "
+          "reduce TX/RX/chirp/sample dimensions or raise the byte allowance");
+    }
+    remaining -= count * bytes;
+  };
+  const auto count = [](std::initializer_list<int64_t> dims) {
+    return checked_element_count<double>(dims, "MIMO source working memory");
+  };
+  charge(count({num_rx, slow_time, samples}), 24);  // float output + double accumulator
+  charge(count({num_rx, slow_time}), 80);  // host/device beat, phase, weights + upload cast
+  charge(count({num_tx, slow_time}), 16);  // excitation weights
+  charge(count({samples}), 64);  // sample times and optional reference chirp, including uploads
+  if (tdm) {
+    charge(count({slow_time}), 8);  // TX pattern
+  }
+  charge(count({num_tx, num_rx}), 24);  // virtual-array positions
+  charge(count({num_tx}), 48);          // scene and flattened TX positions
+  charge(count({num_rx}), 48);          // scene and flattened RX positions
+}
 
 struct RuntimeConfig : CommonRunConfig {
   sim::SimScene scene;
@@ -124,7 +156,8 @@ inline holoscan::config::Document normalize_operator_fields(holoscan::config::Do
   return document;
 }
 
-inline RuntimeConfig make_runtime_config(const AppParams& authored, const char* workflow_name) {
+inline RuntimeConfig make_runtime_config(const AppParams& authored, const char* workflow_name,
+                                         bool tdm) {
   RuntimeConfig result;
   result.num_frames = authored.run.num_frames;
   result.frame_period = authored.run.frame_period;
@@ -175,6 +208,22 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored, const char* 
   }
   require_finite_positive("app.rx_array.spacing", authored.rx_array.spacing);
 
+  // Validate every source/geometry product before even building the antenna
+  // vectors, then enforce the caller-configurable source payload allowance.
+  const int64_t num_tx = authored.tx_array.num_tx;
+  const int64_t num_rx = checked_element_count<sim::Vec3>(
+      {authored.rx_array.az_elements, authored.rx_array.el_elements}, workflow_name);
+  (void)checked_element_count<double>({num_tx, num_rx, 3}, workflow_name);
+  const int64_t slow_time =
+      tdm ? checked_element_count<int64_t>({num_tx, authored.cube.num_chirps}, workflow_name)
+          : authored.cube.num_chirps;
+  (void)checked_element_count<std::complex<double>>({num_tx, slow_time}, workflow_name);
+  (void)checked_element_count<std::complex<double>>(
+      {num_rx, slow_time, authored.cube.samples_per_chirp}, workflow_name);
+
+  validate_source_working_bytes(num_tx, num_rx, slow_time, authored.cube.samples_per_chirp, tdm,
+                                authored.max_source_working_bytes);
+
   const auto& waveform = authored.waveform;
   result.scene.waveform.carrier_frequency = waveform.carrier_frequency();
   result.scene.waveform.bandwidth = waveform.bandwidth();
@@ -219,7 +268,12 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored, const char* 
 inline int64_t snapshot_count(const std::vector<int64_t>& window) {
   const int64_t doppler_half = window.empty() ? 0 : window[0];
   const int64_t range_half = window.size() > 1 ? window[1] : doppler_half;
-  return (2 * doppler_half + 1) * (2 * range_half + 1);
+  const int64_t max_half = (std::numeric_limits<int64_t>::max() - 1) / 2;
+  if (doppler_half < 0 || range_half < 0 || doppler_half > max_half || range_half > max_half) {
+    throw std::invalid_argument("MIMO snapshot_window extents are negative or overflow int64");
+  }
+  return checked_element_count<int64_t>({2 * doppler_half + 1, 2 * range_half + 1},
+                                        "MIMO snapshot_window");
 }
 
 inline std::vector<int64_t> report_index_columns(const FeatureAssemblyParams& assembly) {
@@ -280,13 +334,14 @@ inline MaxTensorExtents make_extents(const RuntimeConfig& runtime, int64_t repor
   const int64_t range_bins = range.nfft > 0 ? range.nfft : samples;
   const int64_t pre_doppler = doppler.nfft > 0 ? doppler.nfft : chirps;
   const int64_t max_doppler = std::max(pre_doppler, report_doppler);
-  const int64_t map_cells = report_doppler * range_bins;
+  const int64_t map_cells =
+      checked_element_count<int64_t>({report_doppler, range_bins}, "MIMO range-Doppler map");
 
   result.max_tx = num_tx;
   result.max_rx = num_rx;
   result.max_chirps = chirps;
   if (tdm) {
-    result.max_interleaved_chirps = num_tx * chirps;
+    result.max_interleaved_chirps = checked_element_count<int64_t>({num_tx, chirps}, "MIMO TDM");
   }
   result.max_samples_per_chirp = samples;
   result.max_range_bins = range_bins;
@@ -338,7 +393,7 @@ struct CommonPrepared {
 
 inline CommonPrepared prepare_common(const holoscan::config::Document& document,
                                      const AppParams& authored, const char* workflow_name) {
-  RuntimeConfig runtime = make_runtime_config(authored, workflow_name);
+  RuntimeConfig runtime = make_runtime_config(authored, workflow_name, false);
   auto range = decode_params<FMCWRangeProcessorParams>(document, "/range_processor");
   auto doppler = decode_params<FMCWDopplerProcessorParams>(document, "/doppler_processor");
 
@@ -390,7 +445,7 @@ inline TdmConfig load_tdm_config_impl(const std::filesystem::path& path,
     throw std::runtime_error("tdm: app.tdm.physical_chirp_repetition_interval is required");
   }
 
-  RuntimeConfig runtime = make_runtime_config(*app_params, "tdm");
+  RuntimeConfig runtime = make_runtime_config(*app_params, "tdm", true);
 
   const double physical_pri = app_params->tdm->physical_chirp_repetition_interval;
   require_finite_positive("app.tdm.physical_chirp_repetition_interval", physical_pri);
@@ -409,7 +464,8 @@ inline TdmConfig load_tdm_config_impl(const std::filesystem::path& path,
   schedule.num_tx = app_params->tx_array.num_tx;
   schedule.tx_order = app_params->tdm->tx_order;
   schedule.validate();
-  (void)schedule.expand_chirp_tx_index(schedule.num_tx * runtime.scene.num_chirps);
+  (void)schedule.expand_chirp_tx_index(
+      checked_element_count<int64_t>({schedule.num_tx, runtime.scene.num_chirps}, "MIMO TDM"));
 
   reject_authored(document, "/mimo_deinterleave/tx_schedule");
   MIMODeinterleaveParams deinterleave_baseline;
@@ -443,7 +499,7 @@ inline TdmConfig load_tdm_config_impl(const std::filesystem::path& path,
 
   reject_authored(document, "/cfar_detector/nci_fold");
   CFARParams cfar_baseline;
-  cfar_baseline.nci_fold = num_tx * num_rx;
+  cfar_baseline.nci_fold = checked_element_count<int64_t>({num_tx, num_rx}, "MIMO TDM channels");
   auto cfar = decode_params<CFARParams>(document, "/cfar_detector", std::move(cfar_baseline));
   reject_authored(document, "/beamscan_estimator/array_geometry");
   BeamscanParams beamscan_baseline;
@@ -482,10 +538,9 @@ inline DdmConfig load_ddm_config(const std::filesystem::path& path) {
     throw std::runtime_error("ddm: app.tdm must not be authored");
   }
   reject_authored(document, "/clutter_filter");
-  CommonPrepared common = prepare_common(document, *app_params, "ddm");
 
   DDMDenseDemultiplexParams demultiplex_baseline;
-  std::optional<std::string> generator;
+  DdmSimulationConfig simulation;
   auto root_ddm = document.try_find("/ddm");
   if (!root_ddm) {
     throw std::runtime_error(holoscan::config::format_error(root_ddm.error()));
@@ -495,8 +550,21 @@ inline DdmConfig load_ddm_config(const std::filesystem::path& path) {
     if (!decoded) {
       throw std::runtime_error(holoscan::config::format_error(decoded.error()));
     }
-    generator = decoded->generate_phase_codes;
+    simulation = *decoded;
   }
+  require_positive("ddm.max_generated_code_bytes", simulation.max_generated_code_bytes);
+  const auto& generator = simulation.generate_phase_codes;
+  if (generator.has_value()) {
+    const auto elements = checked_element_count<std::complex<double>>(
+        {app_params->tx_array.num_tx, app_params->cube.num_chirps}, "DDM generated code");
+    if (elements >
+        simulation.max_generated_code_bytes / static_cast<int64_t>(sizeof(std::complex<double>))) {
+      throw std::runtime_error(
+          "generated DDM code table exceeds ddm.max_generated_code_bytes; "
+          "reduce app.tx_array.num_tx/app.cube.num_chirps or raise the byte limit");
+    }
+  }
+  CommonPrepared common = prepare_common(document, *app_params, "ddm");
   if (generator.has_value()) {
     reject_authored(document, "/ddm_dense_demultiplex/ddm_code");
     if (*generator == "zadoff_chu" || *generator == "zc") {

@@ -28,12 +28,16 @@
 namespace holoscan::radar {
 struct DDMDenseDemultiplexParams {
   DDMCodeDescriptor ddm_code{};
+  std::uint64_t cache_budget_bytes{134217728ULL};
 };
-HOLOSCAN_PARAM_SCHEMA(DDMDenseDemultiplexParams,
-                      holoscan::param_schema("com.nvidia.holoscan.radar.DDMDenseDemultiplexParams",
-                                             1),
-                      holoscan::field<&DDMDenseDemultiplexParams::ddm_code>("ddm_code")
-                          .description("Static DDM Doppler-band or phase-code layout."));
+HOLOSCAN_PARAM_SCHEMA(
+    DDMDenseDemultiplexParams,
+    holoscan::param_schema("com.nvidia.holoscan.radar.DDMDenseDemultiplexParams", 2),
+    holoscan::field<&DDMDenseDemultiplexParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
+    holoscan::field<&DDMDenseDemultiplexParams::ddm_code>("ddm_code")
+        .description("Static DDM Doppler-band or phase-code layout."));
 static_assert(holoscan::param_schema_availability<DDMDenseDemultiplexParams>() ==
               holoscan::ParamSchemaAvailability::kDeclared);
 template <typename T>
@@ -52,12 +56,21 @@ class DDMDenseDemultiplexOp : public holoscan::Operator<DDMDenseDemultiplexParam
   Output<Tensor> velocity_bins_out{"velocity_bins_out"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   struct CachedDemux {
     std::shared_ptr<Tensor> device_table;
     std::shared_ptr<Tensor> device_initial_phase_weights;
+    std::size_t cache_bytes() const {
+      return cache_size_add(cache_size_add(0U, cache_payload_bytes(device_table)),
+                            cache_payload_bytes(device_initial_phase_weights));
+    }
   };
   struct CachedCorrelate {
     std::shared_ptr<Tensor> device_corr_weights;
+    std::size_t cache_bytes() const {
+      return cache_size_add(0U, cache_payload_bytes(device_corr_weights));
+    }
   };
   expected<TensorOutputLoan, Error> prepare_demux(ExecutionContext& context,
                                                   const detail::DdmRdMapsLayout& layout,
@@ -74,6 +87,7 @@ class DDMDenseDemultiplexOp : public holoscan::Operator<DDMDenseDemultiplexParam
   Tensor retained_velocity_bins_;
   ConfigCache<CachedDemux> demux_cache_{};
   ConfigCache<CachedCorrelate> correlate_cache_{};
+  ConfigCache<std::shared_ptr<detail::DdmCorrelateScratch>> scratch_cache_{};
   LatchedOutput velocity_bins_out_{};
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{4U};

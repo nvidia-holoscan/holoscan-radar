@@ -18,6 +18,7 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 
+#include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/lfm_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
@@ -39,11 +40,15 @@ struct SARRangeCompressionParams {
   FftNorm fft_norm{FftNorm::kBackward};
   int64_t nfft{0};  // 0 = observed num_samples.
   double propagation_speed{kDefaultPropagationSpeed};
+  std::uint64_t cache_budget_bytes{2147483648ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     SARRangeCompressionParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.SARRangeCompressionParams", 3),
+    holoscan::param_schema("com.nvidia.holoscan.radar.SARRangeCompressionParams", 4),
+    holoscan::field<&SARRangeCompressionParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&SARRangeCompressionParams::range_window>("range_window"),
     holoscan::field<&SARRangeCompressionParams::waveform>("waveform"),
     holoscan::field<&SARRangeCompressionParams::fft_norm>("fft_norm"),
@@ -75,6 +80,8 @@ class SARRangeCompressionOp : public holoscan::Operator<SARRangeCompressionParam
   Input<double> propagation_speed_in{"propagation_speed"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   std::shared_ptr<detail::RangeCompressionState<T>> state_;
   Tensor retained_input_;
   LatchedOutput range_bins_out_;

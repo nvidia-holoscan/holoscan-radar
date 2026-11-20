@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1
+baseline_date: '2026-11-19'
+scope: header_xml_only
+provenance: Project baseline collected from current supplier HTTPS Range responses;
+  not publisher-signed authentication. Radar samples, PVP and support bytes are not
+  authenticated.
+sources:
+  ? s3://umbra-open-data-catalog/sar-data/tasks/Kourou, French Guiana/1378d9a4-8eb3-4d5c-96ce-15797a5a8d27/2023-06-24-13-22-56_UMBRA-05/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd
+  : size_bytes: 4493762824
+    header:
+      offset: 0
+      size: 305
+      sha256: 509179822cbb2ef8fa73fd95d31376fc9e4b0abbf2bc6cd279b572c7d75d225a
+    xml:
+      offset: 1024
+      size: 15458
+      sha256: cd513edf6b08235108a2a5e9d953b872fe6edc84cfe4d08f18ffcf4f975f630d
+  ? s3://capella-open-data/data/2024/11/29/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  : size_bytes: 3706536768
+    header:
+      offset: 0
+      size: 254
+      sha256: 5933f869b3c4bfd98cde7e9b6b6a7ac1c6bee26753e537b00c8246c286e6bc86
+    xml:
+      offset: 1024
+      size: 11152
+      sha256: 4ff7b85fc6f7baa07b9fa496149d97ac37930f8ce78688588906827f05dd9910
+  ? s3://umbra-open-data-catalog/sar-data/tasks/Panama Canal, Panama/2d482820-501d-4a21-9c8a-b0213637a4f4/2023-09-12-02-36-33_UMBRA-04/2023-09-12-02-36-33_UMBRA-04_CPHD.cphd
+  : size_bytes: 840064088
+    header:
+      offset: 0
+      size: 304
+      sha256: 702da55cf8a5194d4a9231cc8cea5693788a2394d6a26236af55aa48d6998404
+    xml:
+      offset: 1024
+      size: 15797
+      sha256: 45e5e16246ea991e121a982ce6ee54eb160c50580539cbb5acc2781cf62f8f4f
+  ? s3://umbra-open-data-catalog/sar-data/tasks/Melbourne, Australia/0a23b3bc-96f2-48cc-8214-c10cef0d48f3/2023-07-14-23-20-06_UMBRA-05/2023-07-14-23-20-06_UMBRA-05_CPHD.cphd
+  : size_bytes: 1148426480
+    header:
+      offset: 0
+      size: 305
+      sha256: 701bacfb9e8526b25a7226e80e961b1924c72cb9b6316c655daa42bb580b76c9
+    xml:
+      offset: 1024
+      size: 15454
+      sha256: bff4c297be9685719c2f17019cbefb61f06826ccaa6b5a69747d8358ff77428f
+  ? s3://umbra-open-data-catalog/sar-data/tasks/Bingham Copper Mine/b276284e-c8c6-4fb5-8aac-0916bc6ef4d6/2023-10-20-04-22-56_UMBRA-04/2023-10-20-04-22-56_UMBRA-04_CPHD.cphd
+  : size_bytes: 1285560208
+    header:
+      offset: 0
+      size: 305
+      sha256: 71070794925afd85881d0675fbc6d93ca35742a5563a6242ecc010679d54820f
+    xml:
+      offset: 1024
+      size: 15943
+      sha256: 3667d3ca89d9f77c61839b86eecb33895b1f2314168fdca2bbf956a4d58dcb7c
+  ? s3://umbra-open-data-catalog/sar-data/tasks/Kourou, French Guiana/b40dc22c-c15f-4295-b71f-3a1db2007bbd/2023-02-22-12-54-56_UMBRA-04/2023-02-22-12-54-56_UMBRA-04_CPHD.cphd
+  : size_bytes: 1862925928
+    header:
+      offset: 0
+      size: 349
+      sha256: e506afa7b8b23ddf56baaa1e3bd7355ba2dfffcfe4c24fa2facf273203e33f91
+    xml:
+      offset: 1024
+      size: 14693
+      sha256: 1f30baf0c00a194ceff9e7567e41d5313ae5c4d474c0238881bd6e9ed6243d4f
+  ? s3://umbra-open-data-catalog/sar-data/tasks/Buenos Aires, ARG/a7a03ef5-6bb6-4f85-aceb-638685a9b3e7/2023-02-08-02-11-21_UMBRA-05/2023-02-08-02-11-21_UMBRA-05_CPHD.cphd
+  : size_bytes: 2068930904
+    header:
+      offset: 0
+      size: 349
+      sha256: 89a4f2e9a4416ab50828d96227a6daaca97604f155cab41b3f0074f83ec345e5
+    xml:
+      offset: 1024
+      size: 14997
+      sha256: 42a5b0217ea541f83b505483fe57924b20c4dfa810f6040e8632ba7d882f17d0
+  ? s3://umbra-open-data-catalog/sar-data/tasks/Intel Ohio One/95d6685e-a4af-4a87-ba0b-b4a43e636e81/2023-10-11-02-20-47_UMBRA-05/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
+  : size_bytes: 4051054792
+    header:
+      offset: 0
+      size: 305
+      sha256: 5ed394bdbd3329bccaef9cc7cf284e5008cd74a643d3b7ad342504a04990ce1d
+    xml:
+      offset: 1024
+      size: 16221
+      sha256: 624b3d2389f2cbf4c5b96ef7c306a7356b73dd1c07019feb1181628f89804c44
+  ? s3://umbra-open-data-catalog/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+  : size_bytes: 30700166304
+    header:
+      offset: 0
+      size: 308
+      sha256: b3c0fdbdb488b709c284f02b0101ee3241c0cd170e1dfff947db51881f84dfcc
+    xml:
+      offset: 1024
+      size: 20344
+      sha256: f4c41c61926ea5fa7faebc753fb3f9cd52c962a594aadda44fb7a8a69a3be799
+  ? s3://umbra-open-data-catalog/sar-data/tasks/Houston_TX/8f28779a-7cfa-412d-9856-4d4d08079198/2024-10-30-16-10-33_UMBRA-06/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd
+  : size_bytes: 118442110104
+    header:
+      offset: 0
+      size: 309
+      sha256: ad2122b3ea270581e44d5d224f20e7755ec6a9f0ce054e16881bbf2436981c82
+    xml:
+      offset: 1024
+      size: 20338
+      sha256: 0b049d336b59b4a9d96db58e5f9db86796ace70ad77d8ddb5b0c8b4c73480f4b

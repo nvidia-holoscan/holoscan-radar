@@ -6,6 +6,7 @@
 #include <cuda/std/complex>
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -38,6 +39,11 @@ struct BeamscanSteeringArtifact {
   std::shared_ptr<Tensor> weights;
   std::shared_ptr<Tensor> az_grid;
   std::shared_ptr<Tensor> el_grid;
+  std::size_t cache_bytes() const {
+    return cache_size_add(cache_size_add(cache_size_add(0U, cache_payload_bytes(weights)),
+                                         cache_payload_bytes(az_grid)),
+                          cache_payload_bytes(el_grid));
+  }
 };
 
 struct BeamscanRuntimeState {
@@ -341,6 +347,12 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(ExecutionContext& context)
     return make_unexpected(
         Error{ErrorCode::kNotSupported, "BeamscanEstimatorOp: no CUDA compute stream"});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  state_->steering_cache.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(*cache_budget_,
+                                     context.params<BeamscanParams>().cache_budget_bytes, [] {
+                                       cudaDeviceSynchronize();
+                                     });
 
   const DLDataType out_dtype = real_dtype<T>();
   auto retain_inputs = [&] {

@@ -47,6 +47,7 @@ adc_cube → FMCWRangeDopplerProcessorOp → rd_maps
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `range_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Fast-time window Cost: Rebuilds range premultiplier / taps, warning once. |
 | `doppler_window` | `WindowSpec` | `none` (rectangular) | `[live]` Exact via wire schema | Slow-time analysis window and, for `mean_subtraction`, clutter-projection weights Cost: Rebuilds Doppler/projection taps, warning once. |
 | `apply_dechirp` | bool | `false` | `[live]` Exact | Software dechirp; needs waveform + complex IF Cost: Rebuilds range premultiplier. |

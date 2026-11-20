@@ -6,6 +6,8 @@
 #include <cuda_runtime_api.h>
 
 #include <complex>
+#include <cstddef>
+#include <memory>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -139,19 +141,22 @@ std::vector<std::complex<double>> build_ddm_corr_weights(const DDMCodeDescriptor
 // Cache key for the non-linear correlate path (includes full code content).
 std::string ddm_correlate_cache_key(const DDMCodeDescriptor& code, int64_t num_doppler);
 
-// Release per-operator cuFFT plan / tile workspace owned by `owner`
-// (pass the DDMDenseDemultiplexOp `this` pointer). Safe no-op if absent.
-void release_ddm_correlate_scratch(void* owner);
+// Operator-owned scratch, including direct cuFFT workspaces (not MatX caches).
+struct DdmCorrelateScratch;
+std::shared_ptr<DdmCorrelateScratch> make_ddm_correlate_scratch(const DdmRdMapsLayout& layout,
+                                                                bool use_float,
+                                                                cudaStream_t stream);
+std::size_t ddm_correlate_scratch_bytes(const DdmCorrelateScratch& scratch);
 
 // Conjugate-correlation DDM demux via FFT:
 //   out[..., m, rx, :, r] = ifft(fft(Y[..., rx, :, r]) * W_m)
 // with W from build_ddm_corr_weights. Equivalent to
 //   out[..., m, rx, d, r] = (1/D) * sum_k Y[..., rx, k, r] *
 //                            conj(C_m[(k-d) mod D]),  C_m = DFT(c_m).
-// `owner` keys per-instance cuFFT/workspace scratch (not shared across ops).
+// The caller retains scratch until all stream work completes.
 template <typename T>
 void run_ddm_correlate_stage(const void* input, void* output, const DdmRdMapsLayout& layout,
-                             int64_t num_tx, const void* d_corr_weights, void* owner,
-                             cudaStream_t stream);
+                             int64_t num_tx, const void* d_corr_weights,
+                             DdmCorrelateScratch& scratch, cudaStream_t stream);
 
 }  // namespace holoscan::radar::detail

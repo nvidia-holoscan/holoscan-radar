@@ -24,9 +24,10 @@
 
   // Host display → container (Holoviz / fmcw_siso visualize).
   // initializeCommand runs on the *host* before the container starts and
-  // opens local X clients; mounts + containerEnv forward DISPLAY and the
-  // X11 socket. Headless / no-xhost hosts: the || true keeps startup soft.
-  "initializeCommand": "bash -c 'command -v xhost >/dev/null && (xhost +local:docker || xhost +local:) || true'",
+  // authorizes only this host user, whose UID the container matches. Keep
+  // cookie-based SSH/X11 forwarding separate; never fall back to all local users.
+  // Headless / no-xhost hosts: the || true keeps startup soft.
+  "initializeCommand": "bash -c 'command -v xhost >/dev/null && user=$(id -un) && xhost \"+SI:localuser:$user\" || true'",
   "containerEnv": {
     "DISPLAY": "${localEnv:DISPLAY}"
   },

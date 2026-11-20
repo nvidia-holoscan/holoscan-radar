@@ -20,6 +20,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
@@ -61,11 +62,15 @@ struct FMCWDopplerProcessorParams {
   FftNorm fft_norm{FftNorm::kBackward};
   // 0 = exact (no zero-padding); ≥ num_chirps when non-zero.
   int64_t nfft{0};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     FMCWDopplerProcessorParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWDopplerProcessorParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWDopplerProcessorParams", 2),
+    holoscan::field<&FMCWDopplerProcessorParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&FMCWDopplerProcessorParams::doppler_window>("doppler_window")
         .description("WindowSpec applied along the chirp (slow-time) axis before "
                      "the Doppler FFT (coherent-gain normalized). Default: none "
@@ -114,6 +119,8 @@ class FMCWDopplerProcessorOp : public holoscan::Operator<FMCWDopplerProcessorPar
   Input<int64_t> nfft_in{"nfft"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   Tensor retained_input_;
 
   // velocity_bins is optional/latched (OPERATOR_API.md).

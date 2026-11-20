@@ -247,3 +247,22 @@ def test_four_mode_override_executes_headless_without_display(
     workflow.run()
     assert workflow.display_progress.expected_ns >= 0
     assert workflow.display_progress.capture_ns >= workflow.display_progress.expected_ns
+
+
+@pytest.mark.parametrize(
+    "loader,directory,preset",
+    [
+        (_radar._load_tdm, "mimo_tdm", "mimo_tdm_smoke"),
+        (_radar._load_ddm, "mimo_ddm", "mimo_ddm_nonlinear_smoke"),
+        (_radar._load_adaptive, "adaptive_aoa", "adaptive_aoa_smoke"),
+        (_radar._load_multi, "multi_waveform", "multi_waveform_smoke"),
+    ],
+)
+def test_mimo_source_allowance_is_enforced_by_python_loaders(loader, directory, preset, tmp_path):
+    base = _ROOT / directory / "config" / f"{preset}.yaml"
+    config = tmp_path / "allowance.yaml"
+    config.write_text(f'extends: "{base}"\napp:\n  max_source_working_bytes: 1\n')
+    with pytest.raises(RuntimeError, match="app.max_source_working_bytes"):
+        loader(str(config))
+    config.write_text(f'extends: "{base}"\napp:\n  max_source_working_bytes: 1073741824\n')
+    loader(str(config))

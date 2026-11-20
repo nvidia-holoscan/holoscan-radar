@@ -13,8 +13,11 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 #include "radar_common/descriptors/tx_schedule.hpp"
@@ -81,6 +84,21 @@ double max_abs_diff(const sim::SimScene& scene) {
 
 TEST(SimGpu, MatchesCpuSingleRx) {
   EXPECT_LT(max_abs_diff(base_scene()), 1e-3);
+}
+
+TEST(SimGpu, RejectsUnrepresentableMimoWeightsAndAccumulatorBeforeDeviceWork) {
+  auto scene = base_scene();
+  scene.tx_positions.push_back({0.0, 0.5, 0.0});
+  constexpr int64_t huge = std::numeric_limits<int64_t>::max();
+  EXPECT_THROW(sim::simulate_mimo_gpu(scene, {}, huge, nullptr), std::invalid_argument);
+  EXPECT_THROW(sim::simulate_mimo_gpu(scene, {}, huge / 16, nullptr), std::invalid_argument);
+  EXPECT_THROW(sim::simulate_mimo_gpu(scene, {}, 0, nullptr), std::invalid_argument);
+  scene.waveform.sample_rate = 1e30;
+  scene.samples_per_chirp = huge / 16;
+  EXPECT_THROW(sim::simulate_mimo_gpu(scene, std::vector<std::complex<double>>(4), 2, nullptr),
+               std::invalid_argument);
+  scene.tx_positions.resize(1);
+  EXPECT_THROW(sim::simulate_gpu(scene, nullptr), std::invalid_argument);
 }
 
 TEST(SimGpu, MatchesCpuMultiRx) {

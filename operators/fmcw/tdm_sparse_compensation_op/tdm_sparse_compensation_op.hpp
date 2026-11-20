@@ -73,11 +73,15 @@ struct TDMSparseCompensationParams {
   std::vector<int64_t> snapshot_window{0, 0};
   SnapshotEdgeMode doppler_edge{SnapshotEdgeMode::kWrap};
   SnapshotEdgeMode range_edge{SnapshotEdgeMode::kShift};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     TDMSparseCompensationParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.TDMSparseCompensationParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.TDMSparseCompensationParams", 2),
+    holoscan::field<&TDMSparseCompensationParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&TDMSparseCompensationParams::waveform>("waveform")
         .description("TDM PRI and carrier frequency. [live]."),
     holoscan::field<&TDMSparseCompensationParams::tx_schedule>("tx_schedule")
@@ -118,9 +122,15 @@ class TDMSparseCompensationOp : public holoscan::Operator<TDMSparseCompensationP
   Output<WireArrayGeometry> array_geometry{"array_geometry"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   struct CachedCorrection {
     std::shared_ptr<Tensor> device_table;
     std::shared_ptr<Tensor> device_fold_table;
+    std::size_t cache_bytes() const {
+      return cache_size_add(cache_size_add(0U, cache_payload_bytes(device_table)),
+                            cache_payload_bytes(device_fold_table));
+    }
   };
 
   expected<void, Error> ensure_virtual_tables(const detail::VirtualAssemblyPlan& plan,

@@ -224,6 +224,58 @@ backoff with jitter and honor `Retry-After` up to 60 seconds. Permanent errors
 (such as 403/404/412/416) and ignored or incorrect byte ranges fail immediately.
 One bounded worker pool reuses its HTTP connections across the entire subset.
 
+Subset preparation validates XML, PVP, support-array, and selected signal byte
+spans against the source length and declared block sizes before fetching
+payloads or creating partial-download state. Dimensions must be positive and
+representable; PVP fields must fit their stride, and support-array element
+sizes must match their format. A one-byte HTTP range probe establishes the
+remote length, including for files shorter than the normal header probe.
+Only the selected channel's PVP records are fetched, excluding block padding.
+Signal rows wider than the staging target (64 MiB by default) are transferred in
+sample-aligned pieces and checkpointed after each complete row. Interruption
+inside a wide row refetches that row on resume; existing checkpoints remain
+compatible. The staging target is not a total memory budget: valid XML, PVP,
+and support-array representations can still consume proportional memory.
+
+CPHD XML containing a `DOCTYPE` declaration is rejected, including declarations
+without entities. Entity resolution and external DTD loading are disabled before
+parsing, and parser network access is disabled. This policy also applies to dry
+runs and forced replacement, before modifying an existing output or resume state.
+Ordinary XML without a `DOCTYPE` keeps the existing validation and preparation path.
+
+Recipe `name` must be a non-empty single filename component. Empty names,
+`.` / `..`, path separators (including backslashes), and absolute or
+drive-qualified paths are rejected rather than rewritten. Use `--output`
+to select a directory or an explicit `.cphd` destination. Explicit output
+selection does not bypass recipe-name validation.
+
+Set `io_chunk_bytes` in a subset recipe, pass `--io-chunk-bytes 16777216`
+to either preparation CLI, or call `subset_cphd(..., io_chunk_bytes=16777216)`
+for a 16 MiB staging/transfer target. Values must be integers of at least
+8 bytes, divisible by 8. CLI overrides take precedence over the recipe;
+the default is 67108864 bytes. This controls signal transfer pieces and
+staging chunks, not total memory or metadata sizes. It may be changed when
+resuming: checkpoints still describe complete rows, and neither output bytes
+nor source/window identity depends on chunk size. Plain object downloads
+through `pull_cphd.py` do not use this subset-only setting.
+
+Measured on GB10 with warm local NVMe/ext4 inputs, Python 3.13.13, NumPy 2.5.4,
+and sarkit 1.12.0: nine alternating baseline/hardened process pairs, including
+checkpoint flush/fsync, gave these median paired elapsed-time changes versus
+`e1ae6390`. Output file checksums matched in every pair.
+
+| Preparation case | Elapsed-time change | Median peak process memory |
+| --- | --- | --- |
+| Kourou local subset, 1024 pulses by 16000 samples | +7.8% | 181.7 to 181.6 MiB |
+| Kourou loopback HTTP subset, 256 pulses by 8000 samples, 16 workers | -0.9% | 72.9 to 72.9 MiB |
+| Synthetic two-row signal, 80 MiB per row | +12.5% | 286.6 to 126.6 MiB |
+
+Positive means slower. The local case includes added per-row file-identity checks;
+the wide-row case trades extra output-file checksum reads for about 56% less
+peak memory. The HTTP difference is within observed variation, and loopback
+does not characterize WAN behavior. These measure subset preparation, not
+the CPHD writer operator or complete SAR Graph throughput.
+
 Interrupted subset downloads now resume automatically when you rerun the same
 `pull_cphd.py --config ...` or `subset_cphd.py ...` command. Keep both
 `houston_1p0m.cphd.part` and `houston_1p0m.cphd.part.json`: the checkpoint advances
@@ -232,6 +284,51 @@ incomplete/uncheckpointed chunk is fetched again. The final `.cphd` is replaced
 only after all signal rows are complete; an existing completed file remains
 usable during a replacement download. A small hidden destination lock file
 prevents concurrent writers and is harmless after the process exits.
+
+Bundled example downloads verify the source size and SHA-256 of the original
+CPHD header and XML against the repository's
+[metadata baseline](sar_data/metadata_pins.yaml). All ten catalog objects are
+covered, including Houston's full source object before a subset is prepared.
+HTTPS and AWS downloads verify their temporary files before publishing them;
+existing pinned full files are checked before parsing or skipping. Subsetting
+checks the small source metadata ranges before parsing, including on resume,
+and retains normal partial-download behavior.
+
+This is a project baseline collected from supplier HTTPS responses on
+2026-11-19, not a publisher signature or proof of original provenance. It detects
+later replacement of the header/XML or a change in total object size. PVP,
+support arrays and radar samples are not authenticated by these hashes. A
+baseline change requires review of the intended example data; a mismatch is
+refused rather than automatically replacing the expected hash.
+
+These checks belong only to the download/preparation tools' known remote
+examples. Custom URLs and local CPHD files do not need catalog hashes. The
+native CPHD operator continues to accept any valid CPHD; it has no catalog or
+hash requirement.
+
+Remote sources are restricted to these HTTPS origins by default:
+
+- `https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com`
+- `https://capella-open-data.s3.amazonaws.com`
+- `https://capella-open-data.s3.us-west-2.amazonaws.com`
+
+A custom server requires explicit caller approval outside the recipe:
+
+```bash
+uv run --with-requirements tools/sar_data/requirements.txt tools/sar_data/subset_cphd.py \
+  --source https://datasets.example.org/scene.cphd \
+  --allow-source-origin https://datasets.example.org -o data/sar/custom.cphd
+```
+
+Repeat `--allow-source-origin` to approve more servers. Approval covers exactly
+that scheme, host and port, not subdomains or other ports. Python callers pass
+`allowed_source_origins=("https://datasets.example.org",)` to `subset_cphd()`
+or `HttpByteSource`. A recipe cannot approve itself. Internal/loopback servers
+and plain HTTP require the same explicit approval; the caller is responsible
+for trusting those destinations. Range requests reject redirects. Whole-object
+GET/HEAD requests check every redirect before connecting to its destination;
+an HTTPS-to-HTTP redirect is refused unless that HTTP origin was also approved.
+Local file sources and existing pulse/sample selection are unchanged.
 
 Resume validates the source identity, requested pulse/sample windows, encoded
 CPHD metadata/layout, committed file length, and last chunk checksum. HTTP

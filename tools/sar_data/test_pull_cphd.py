@@ -15,6 +15,19 @@ import pull_cphd
 
 
 class DownloadCliTest(unittest.TestCase):
+    def test_catalog_rejects_unsafe_recipe_names(self):
+        for name in ("../escape", "/tmp/escape", "nested\\name", "", None):
+            with (
+                self.subTest(name=name),
+                mock.patch.object(
+                    pull_cphd.yaml,
+                    "safe_load",
+                    return_value={"name": name, "source": {"bucket": "unused", "key": "unused"}},
+                ),
+                self.assertRaisesRegex(ValueError, "single filename component"),
+            ):
+                pull_cphd.dataset_catalog()
+
     def test_autofocus_uses_original_catalog_object_and_preset_path(self):
         output = io.StringIO()
         with (
@@ -197,6 +210,14 @@ class DownloadCliTest(unittest.TestCase):
         self.assertIn(str(job.destination), command)
         self.assertIn("--force", command)
 
+    def test_subset_transfer_size_is_forwarded(self):
+        job = pull_cphd.jobs_for_config(pull_cphd.APPS["video_sar"])[0]
+        with mock.patch.object(pull_cphd.subprocess, "run") as run:
+            pull_cphd.prepare_one(job, False, 1, 1, io_chunk_bytes=16777216)
+        command = run.call_args.args[0]
+        position = command.index("--io-chunk-bytes")
+        self.assertEqual(command[position + 1], "16777216")
+
     def test_duplicate_config_keys_fail_before_selection_or_side_effects(self):
         known = "sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd"
         for text in (
@@ -277,13 +298,13 @@ class DownloadCliTest(unittest.TestCase):
                         # A prior HEAD length must not override the GET length.
                         progress = pull_cphd.DownloadProgress("test", 4)
                         with (
-                            mock.patch.object(
-                                pull_cphd.urllib.request, "urlopen", return_value=response
-                            ),
+                            mock.patch.object(pull_cphd, "open_source_url", return_value=response),
                             contextlib.redirect_stderr(io.StringIO()),
                             self.assertRaisesRegex(RuntimeError, "download size mismatch"),
                         ):
-                            pull_cphd.download_https("https://example.test/collect", dest, progress)
+                            pull_cphd.download_https(
+                                pull_cphd.UMBRA_HTTPS + "collect", dest, progress
+                            )
                         if existing is None:
                             self.assertFalse(dest.exists())
                         else:
@@ -299,13 +320,11 @@ class DownloadCliTest(unittest.TestCase):
                     response = io.BytesIO(b"data")
                     response.headers = headers
                     with (
-                        mock.patch.object(
-                            pull_cphd.urllib.request, "urlopen", return_value=response
-                        ),
+                        mock.patch.object(pull_cphd, "open_source_url", return_value=response),
                         contextlib.redirect_stderr(io.StringIO()),
                     ):
                         pull_cphd.download_https(
-                            "https://example.test/collect",
+                            pull_cphd.UMBRA_HTTPS + "collect",
                             dest,
                             pull_cphd.DownloadProgress("test", None),
                         )
@@ -321,8 +340,8 @@ class DownloadCliTest(unittest.TestCase):
                 mock.patch.object(pull_cphd.shutil, "which", return_value=None),
                 mock.patch.object(pull_cphd, "https_size", return_value=None),
                 mock.patch.object(
-                    pull_cphd.urllib.request,
-                    "urlopen",
+                    pull_cphd,
+                    "open_source_url",
                     side_effect=urllib.error.HTTPError(
                         "https://example.test/missing", 404, "Not Found", {}, None
                     ),

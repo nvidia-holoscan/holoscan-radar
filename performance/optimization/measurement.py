@@ -9,6 +9,7 @@ import hashlib
 import math
 import os
 import signal
+import stat
 import statistics
 import subprocess
 import tempfile
@@ -143,18 +144,47 @@ def derive_raw(report, sampling):
 
 @contextmanager
 def device_lock(device):
-    folder = Path(tempfile.gettempdir()) / "radar-operator-perf-locks"
-    folder.mkdir(exist_ok=True)
-    path = folder / (hashlib.sha256(device.encode()).hexdigest() + ".lock")
-    with path.open("a") as stream:
+    # Per-user coordination across working directories. Keep lock inodes after
+    # release: unlinking permits a new entrant to bypass an existing waiter.
+    uid = os.getuid()
+    folder = Path(tempfile.gettempdir()) / f"radar-operator-perf-locks-{uid}"
+    try:
+        folder.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    directory = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError("unsafe measurement lock directory ownership or permissions")
+        name = hashlib.sha256(device.encode()).hexdigest() + ".lock"
+        descriptor = os.open(
+            name,
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory,
+        )
         try:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise ValueError("measurement device is already in use") from error
-        try:
-            yield
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != uid
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_nlink != 1
+            ):
+                raise ValueError("unsafe measurement lock file")
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise ValueError("measurement device is already in use") from error
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+            os.close(descriptor)
+    finally:
+        os.close(directory)
 
 
 def process_ticks(pid):

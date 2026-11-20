@@ -32,6 +32,7 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/math/checked_sizes.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/sim/simulator.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -87,10 +88,12 @@ class MimoTdmAdcSourceOp : public holoscan::Operator<> {
       return {};
     }
     const int64_t num_tx = static_cast<int64_t>(config_.scene.tx_positions.size());
-    const int64_t slow_time = num_tx * config_.scene.num_chirps;
+    const int64_t slow_time = checked_element_count<int64_t>({num_tx, config_.scene.num_chirps},
+                                                             "MimoTdmAdcSourceOp slow_time");
+    const int64_t count = checked_element_count<std::complex<double>>({num_tx, slow_time},
+                                                                      "MimoTdmAdcSourceOp weights");
     const std::vector<int64_t> pattern = config_.tx_schedule.expand_chirp_tx_index(slow_time);
-    std::vector<std::complex<double>> weights(static_cast<std::size_t>(num_tx * slow_time),
-                                              {0.0, 0.0});
+    std::vector<std::complex<double>> weights(static_cast<std::size_t>(count), {0.0, 0.0});
     for (int64_t chirp = 0; chirp < slow_time; ++chirp) {
       weights[static_cast<std::size_t>(pattern[static_cast<std::size_t>(chirp)] * slow_time +
                                        chirp)] = {1.0, 0.0};
@@ -214,9 +217,11 @@ class MimoDdmAdcSourceOp : public holoscan::Operator<> {
     }
     const int64_t num_tx = static_cast<int64_t>(config_.scene.tx_positions.size());
     const int64_t slow_time = config_.scene.num_chirps;
+    const int64_t count = checked_element_count<std::complex<double>>({num_tx, slow_time},
+                                                                      "MimoDdmAdcSourceOp weights");
     std::vector<std::complex<double>> weights;
     if (!config_.phase_codes.empty()) {
-      if (static_cast<int64_t>(config_.phase_codes.size()) != num_tx * slow_time) {
+      if (static_cast<int64_t>(config_.phase_codes.size()) != count) {
         return invalid_code("phase_codes length must equal num_tx * num_chirps");
       }
       weights = config_.phase_codes;
@@ -224,7 +229,7 @@ class MimoDdmAdcSourceOp : public holoscan::Operator<> {
       if (static_cast<int64_t>(config_.doppler_offsets.size()) != num_tx) {
         return invalid_code("doppler_offsets length must equal num_tx");
       }
-      weights.assign(static_cast<std::size_t>(num_tx * slow_time), {0.0, 0.0});
+      weights.assign(static_cast<std::size_t>(count), {0.0, 0.0});
       for (int64_t tx = 0; tx < num_tx; ++tx) {
         for (int64_t chirp = 0; chirp < slow_time; ++chirp) {
           const double phase = 2.0 * kPi * config_.doppler_offsets[static_cast<std::size_t>(tx)] *

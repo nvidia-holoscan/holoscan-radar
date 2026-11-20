@@ -81,10 +81,14 @@ struct MVDRParams {
   // Empty → off; [P] ULA; [P_az, P_el] URA.
   std::vector<int64_t> spatial_smoothing{};
   bool forward_backward{true};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    MVDRParams, holoscan::param_schema("com.nvidia.holoscan.radar.MVDRParams", 2),
+    MVDRParams, holoscan::param_schema("com.nvidia.holoscan.radar.MVDRParams", 3),
+    holoscan::field<&MVDRParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&MVDRParams::array_geometry>("array_geometry")
         .description("Element positions and wavelength; num_elements must match "
                      "snapshot channels"),
@@ -146,6 +150,8 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
   Input<int64_t> max_sources{"max_sources"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_snapshot_;

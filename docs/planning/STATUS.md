@@ -4,6 +4,24 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **AIVO merge of main after SAR GUI squash** on
+  `deustice/aivo-fixes`: resolve eleven conflicts while retaining the AIVO
+  hardening and regression coverage. Incoming `bc2a3f3b` has the identical tree
+  to already-integrated SAR GUI `d6aefe49`; no incoming product changes are lost.
+  All 76 CPHD preparation and 23 host-side tests plus full pinned lint pass.
+  The merge changes history and this status record only.
+
+- **2026-11-19** — **AIVO branch SAR GUI integration validation** on
+  `deustice/aivo-fixes`: merged `deustice/sar-gui` through `3ed553af` without
+  conflicts. Full build and lint pass; 47 focused SAR/display/X11 checks pass.
+  All 1,616 native cases are covered: 1,612 initially passed; four video SAR
+  false failures came from a single-pixel probe covered by the new sensor arrow.
+  Probe a grayscale region instead; all 28 SAR window/fixture reruns pass.
+  All 297 provider, 254 host-tool and 28 CI helper checks pass, including all
+  14 native application smoke workflows. Updated a stale CLI test to expect
+  existing presenter arguments. Full pinned lint passes. Diagnostic performance
+  runs and physical-display appearance are outside this correctness validation.
+
 - **2026-11-19** — **SAR GUI CI image-probe correction** on
   `deustice/sar-gui`: port the existing `deustice/aivo-fixes` correction for
   Jenkins #279. The cyan sensor-look overlay can cover the grayscale test's
@@ -1754,8 +1772,114 @@ still declare SDK 4.3.0.
 
 ## In flight / claims
 
+- **2026-11-19 — AIVO bundled dataset metadata integrity** (`deustice/aivo-fixes`, Codex):
+  approved download-only header/XML baselines for bundled examples. Collecting
+  current supplier HTTPS Range responses into a reviewed manifest; verify before
+  parsing remote metadata, accepting existing pinned files or publishing complete
+  HTTPS/AWS downloads. Local/custom CPHDs and the native CPHD operator remain
+  unrestricted. This is change detection from the project baseline, not publisher
+  authentication; PVP, support and radar sample bytes remain outside its scope.
+  All ten catalog objects are pinned. All 76 offline preparation checks pass,
+  including metadata tamper rejection before parse/publication, bounded reads,
+  existing-file protection and pinned-source HTTP interruption/resume. Baselines
+  also match the existing local Kourou autofocus and Atlanta files. Pinned lint
+  passes. This is the approved metadata-only mitigation, not whole-object
+  authentication; remote AIVO verification awaits the developer's push.
+
+- **2026-11-19 — AIVO dataset HTTP destinations** (`deustice/aivo-fixes`, Codex):
+  approved default Umbra/Capella origins with explicit caller/CLI approval for
+  extras; recipes cannot expand their own permissions. Applying exact
+  scheme/host/port checks before Range connections, whole-file requests and
+  redirects. Existing range/resume and caller-approved internal/test servers
+  remain supported. All 66 offline preparation checks pass, including real
+  loopback redirect isolation, CLI approval, recipe self-approval rejection,
+  preservation of existing outputs/checkpoints and interrupted Range resume.
+  The separately approved header/XML baseline applies only to bundled example
+  downloads; the native CPHD operator continues to accept arbitrary valid CPHD files.
+
+- **2026-11-19 — AIVO devcontainer X11 authorization** (`deustice/aivo-fixes`, Codex):
+  replacing the all-local-users grant with the current host account's
+  server-interpreted `localuser` grant, matching the existing container UID
+  mapping. Preserve soft startup and cookie-based forwarded display setup;
+  never broaden authorization if the scoped grant fails. Document removal of
+  legacy grants without revoking unrelated sessions automatically. All seven
+  mocked-host startup tests pass, including local/forwarded environment handling,
+  headless/no-xhost startup, identity failures and no broader fallback on error.
+  New fixes remain local; the developer owns pushing and subsequent
+  exact-commit AIVO verification.
+
+- **2026-11-19 — AIVO Blossom checkout trust** (`deustice/aivo-fixes`, Codex):
+  repository-owned source requirement approved. The credential-bearing scan now
+  requires the authorized PR source repository to match `github.repository`;
+  fork scans and their dependent CI trigger are skipped. Its token explicitly
+  permits only content reads and commit-status writes. Static inspection of the
+  pinned public action shows a binary-only implementation running a source-mounted
+  scanner container with a build option and scanner API token. This establishes
+  potential exposure of scanner credentials; it does not demonstrate forwarding
+  of the GitHub token or Blossom key into the scanner container. All three
+  security-policy checks pass locally and through CTest in the SDK container;
+  the build and pinned lint pass. A live Blossom run with production credentials
+  has not been triggered. X11, per-user locks and this fix are local;
+  further commits stay local at the developer's request; the developer will push.
+
+- **2026-11-19 — AIVO performance device locks** (`deustice/aivo-fixes`, Codex):
+  per-user coordination approved; locks retain cross-directory/process exclusion
+  for that user, without claiming cross-user GPU scheduling. Use an owned 0700
+  directory and owned 0600 regular, single-link files, opened relative to a
+  validated directory descriptor without following symlinks. Reject unsafe
+  entries; retain lock inodes after release. All 138 performance-tool checks
+  pass, including eleven focused contention, cleanup, ownership, permission,
+  symlink, hard-link and FIFO regressions. Full pinned lint passes. AIVO
+  confirmation will be pinned to the pushed commit.
+
+- **2026-11-19 — AIVO X11 property validation** (`deustice/aivo-fixes`, Codex):
+  merged `origin/deustice/sar-gui` through `d958019e` without conflicts; full
+  lint passes. Work-area, frame-extents and client-list decoding now validates
+  types, formats and lengths before native-long reads, with valid placement and
+  existing missing-property fallbacks preserved. All ten property regressions
+  pass, including short format-8/16 buffers, cleanup and native-long stride;
+  AddressSanitizer/UndefinedBehaviorSanitizer are clean. The merged build and
+  all 1,605 non-performance native/application CTests pass, including 80
+  visualization checks and six SAR smokes. All 293 provider checks also pass
+  in isolation. AIVO confirmation will be pinned to the pushed commit.
+
+- **2026-11-19 — CPHD preparation XML** (`deustice/aivo-fixes`, Codex):
+  implemented the approved rejection of every DOCTYPE declaration, with
+  entity resolution, external-DTD loading and parser-network access disabled
+  before parsing. All 57 offline preparation tests pass, including 60 malicious
+  XML combinations (five declaration forms, UTF-8/UTF-16, namespaced/minimal,
+  normal/forced/dry-run). External resolvers are never called and existing
+  output/resume files remain unchanged. Ordinary CPHD writer/reader, samples,
+  metadata and resume regressions pass. No C++ operator interface change.
+
+- **2026-11-19 — AIVO SAR arithmetic** (`deustice/aivo-fixes`, Codex):
+  mosaic canvas/crop/tile arithmetic is hardened before allocation and copies;
+  six float/double overflow, malformed-placement, phase-preserving crop and
+  power-decimation tests pass, and both strip applications rebuild. No resource
+  cap or valid-input contract change. Backprojection conversion sizing/indexing
+  now uses checked 64-bit counts and grid-stride kernels, including coordinate
+  conversion. All eight focused backprojection checks pass: large counts,
+  overflow rejection, float/double grid-stride tails/guards, three precision
+  conversion backend oracles, scroll and sample-lattice regressions. Full build
+  and lint pass; all 1,432 other native/fixture CTests pass. The provider run
+  had a calibration-log deadline failure and video-SAR timeout under parallel
+  GPU load; the complete 293-check provider suite passes in isolation. All six
+  SAR application fixture smokes pass. AIVO confirms both new CPHD
+  PVP-extent and signal-product reports remediated at `2cd95dce`; the cache fix
+  is also confirmed. Ref-pinned checks leave portal status unchanged.
+
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| Operator cache byte budgets | Codex | `deustice/aivo-fixes` | **implemented; contract change approved 2026-11-19:** shared instance LRU budget; 64 MiB generally, 128 MiB dense DDM, 2 GiB SAR range compression; zero disables retention. Charge artifacts, keys/bookkeeping and cached scratch; oversized entries execute uncached with bounded warnings; leave MatX caches alone. All 1,422 other unit/fixture CTests and 293 provider checks pass; provider startup-log check failed in parallel and passed in isolation. Float/double partial DDM tiles, SAR eviction and steering reuse pass; GB10 DDM scratch is about 64 MiB. Full lint passes. AIVO re-verification is pending portal connectivity. |
+| CPHD reader bounds and transfer size | Codex | `deustice/aivo-fixes` | **verified locally; contract addition:** file/block spans and allocation arithmetic are checked before reads; valid leading ticks remain usable. Static `io_chunk_bytes` defaults to 67108864 (64 MiB), schema 3; positive 8-byte-aligned transfer granularity preserves tick sizes. All 20 native CPHD tests, three provider precision variants, six SAR smokes, and pinned lint pass. Valid large metadata/PVP still require proportional memory; AIVO statuses are unchanged. |
+| CPHD preparation bounds and transfer size | Codex | `deustice/aivo-fixes` | **verified locally:** validate XML/PVP/support/signal spans, field layouts, and allocation arithmetic before fetching payloads or creating partials; read selected-channel PVP without padding. Wide rows stream in bounded pieces with resume compatibility. Python API, recipe, and both preparation CLIs expose `io_chunk_bytes`, default 67108864; CLI overrides recipe. All 53 pre-name-validation offline tests and pinned lint pass. No total memory budget or checkpoint migration. |
+| CPHD hardening performance measurement | Codex | `deustice/aivo-fixes` | **measured:** GB10 warm-cache host-parser comparison against `e1ae6390`, seven alternating process pairs/case: normal 100/1024/3181-pulse paired medians -2.2% to +2.8% elapsed; one-pulse stress +39.6% (about 3 microseconds/tick). Nine Python pairs/case: local subset +7.8%; loopback HTTP -0.9% within variation; 80 MiB-wide rows +12.5% with RSS 286.6 to 126.6 MiB. Output checksums match. README/tool guide record method and limits; no full GPU Graph, cold-cache, WAN, or writer-operator claim. Raw evidence/reproduction archive: `/tmp/cphd-ingestion-impact-20261119.tar.gz`. |
+| Recipe filename containment | Codex | `deustice/aivo-fixes` | **verified locally; behavior decision confirmed 2026-11-19:** recipe names must be non-empty single filename components; reject traversal, separators, absolute/drive-qualified paths, and non-string names without rewriting. Shared validation covers the subset loader/CLI and preparation catalog; explicit output selection remains available. All 56 offline preparation tests and pinned lint pass. AIVO statuses are unchanged. |
+| DDM example generated-table allowance | Codex | `deustice/aivo-fixes` | **verified locally; approved 2026-11-19:** positive `ddm.max_generated_code_bytes`, default 64 MiB, adjustable by YAML. Check one generated complex-double table before geometry/generation in the shared C++/Python loader. Excludes copies, scratch, authored tables and source/graph memory; YAML can raise its own allowance, so hostile-config exhaustion remains possible. General library generators/operators retain existing behavior. All 32 configuration/presentation tests and pinned full lint pass; AIVO confirmation awaits user push. |
+| DDM generator allocation arithmetic | Codex | `deustice/aivo-fixes` | **verified locally; behavior decision confirmed 2026-11-19:** shared checked element/byte counts reject non-positive or unrepresentable dimensions before root search, allocation, or generation loops. No resource budget; valid code values are unchanged. All six generator tests and pinned lint pass. AIVO statuses are unchanged. |
+| MIMO source working allowance | Codex | `deustice/aivo-fixes` | **verified locally; approved 2026-11-19:** YAML-adjustable positive `app.max_source_working_bytes`, default 512 MiB; shared loader preflight before geometry, including every multi-waveform profile. Conservative single-synthesis payload estimate; excludes retained frames, graph pools, caches and visualization. YAML can raise its own allowance; hostile-configuration exhaustion remains possible. No general operator/simulator API limits. Full rebuild, 141 configuration checks, 16 multi-profile checks, five native smokes, 297 provider checks and full lint pass; AIVO confirmation awaits user push. |
+| MIMO allocation arithmetic | Codex | `deustice/aivo-fixes` | **verified locally; behavior decision confirmed 2026-11-19:** validate source weights, geometry, GPU accumulators, snapshot/map products, and multi-profile extents before generation/allocation. No memory budget; valid huge allocations remain caller-controlled. All 102 host/GPU simulator and configuration tests, five rebuilt workflow smokes, 42 Python MIMO checks, and pinned lint pass. AIVO statuses are unchanged. |
+| DBSCAN early input bound | Codex | `deustice/aivo-fixes` | **verified locally; behavior decision confirmed 2026-11-19:** reject ticks above ctor `MaxTensorExtents.max_points` before workspace allocation or GPU work; preserve within-bound labels and exact-bound acceptance in float/double. No truncation or separate work budget; within-bound quadratic work remains possible. All 34 DBSCAN tests and pinned lint pass. AIVO statuses are unchanged. |
 | CPHD pull progress | Codex | `deustice/pull-script` | **verified locally:** shared AWS/HTTPS/subset byte, percentage, rate, elapsed, and ETA display; terminal updates and periodic log lines during waits; explicit validation, skip, failure, and completion labels. All 41 offline checks pass, including existing selection and resume regressions. Application YAMLs are unchanged. |
 | SAR missing-input CLI diagnostics | Codex | `deustice/sar-python` | **verified locally:** missing-CPHD errors show the next preparation command and documentation without a Python traceback. Terminal headings use red/bold cyan/bold; redirected output, `NO_COLOR`, and dumb terminals stay plain. Six host-only CLI checks pass; unexpected build/run errors still propagate. Native diagnostic fragment compiles and passes host-path, shell-quoting, and override checks; full applications were not rebuilt. |
 | Config-driven SAR data preparation | Codex | `deustice/sar-python` | **verified locally:** selected YAML inputs are checked against pinned dataset paths and subset recipes before downloads or directory creation. All 12 shipped presets resolve offline; 14 downloader regressions pass, including mismatches, malformed YAML, custom data roots, deduplication, and Houston recipe dispatch. Missing-file guidance prints the selected config in a shell-quoted host command. Native diagnostic fragment compiles and passes path/quoting checks; no full collections downloaded. |
