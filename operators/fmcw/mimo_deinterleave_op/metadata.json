@@ -1,0 +1,26 @@
+{
+    "$schema": "urn:holohub:operator:v1",
+    "operator": {
+        "name": "MIMODeinterleaveOp",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "1.0.0",
+        "changelog": {
+            "0.1.0": "Initial Release",
+            "0.2.0": "Tick-shell cleanup: ctor-sized gather map, fail-closed rank 3"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "4.3.0",
+            "tested_versions": ["4.3.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "MIMO", "TDM"],
+        "ranking": 5,
+        "requirements": {}
+    }
+}

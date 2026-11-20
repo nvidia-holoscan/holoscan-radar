@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind==3.0.1"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "holoscan-radar"
+version = "1.0.0"
+description = "Accelerated radar signal processing operators for the Holoscan ecosystem"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Holoscan Team" },
+]
+requires-python = ">=3.12"
+
+# Development tools stay out of the published radar wheel. The CLI requires
+# Python 3.12; the radar wheel uses the SDK's CPython 3.12 stable ABI.
+[dependency-groups]
+cli = ["holoscan-cli==5.0.0"]
+test = ["pytest==8.4.2", "pytest-timeout==2.4.0"]
+
+[tool.uv]
+package = false
+default-groups = ["cli", "test"]
+
+[tool.uv.dependency-groups]
+cli = { requires-python = ">=3.11" }
+
+[tool.uv.sources]
+holoscan-cli = { index = "nvidia" }
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+explicit = true
+
+# NOTE: holoscan SDK is not declared as a runtime dependency here because the
+# wheel cannot guarantee binary compatibility across CUDA variants (cu12/cu13).
+# Document the install command in the README.
+
+[tool.scikit-build]
+cmake.version = ">=4.0"
+# Build only what the wheel needs: turn off test and app subprojects, and
+# turn off the deb option (which is build-type-driven, not wheel-driven).
+# The Python option selects all 33 operators and native application helpers,
+# without building application executables.
+cmake.args = [
+    "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+    "-DBUILD_ALL=OFF",
+    "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
+]
+# Wheel content comes from CMake install rules. Use *relative* DESTINATIONs in
+# install(...) calls — scikit-build-core stages those into the wheel root.
+# Setting wheel.install-dir = "/" would require the experimental flag.
+wheel.packages = []
+wheel.py-api = "cp312"
+
+[tool.holoscan]
+repo-prefix = "holoscan-radar"
+container-prefix = "holoscan-radar"
+workspace-name = "holoscan-radar"
+cuda = 13
+ctest-script = "ci/container.ctest"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Build and wheel outputs plus local caches are excluded from lint discovery.
+exclude = [
+    "build*",
+    "dist",
+    ".cache",
+    ".local",
+    ".cupy",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+# E402: intentional late imports after build-path / cupy / importorskip setup.
+# I001: leave import sorting to the dedicated isort pre-commit hook.
+ignore = ["E501", "UP007", "E402", "I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["holoscan"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["holoscan"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+extend-exclude = """
+/(
+  \\.cache
+  | build[^/]*
+  | install[^/]*
+  | \\.local
+)/
+"""
+
+[project.entry-points."holoscan.modules"]
+radar = "holoscan_radar"

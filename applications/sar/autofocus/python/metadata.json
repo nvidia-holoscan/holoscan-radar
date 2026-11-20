@@ -1,0 +1,63 @@
+{
+  "$schema": "urn:holohub:application:v1",
+  "application": {
+    "name": "autofocus",
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "language": [
+      "Python"
+    ],
+    "version": "1.0.0",
+    "changelog": {
+      "0.1.0": "Standalone SAR Figure 2 phase gradient autofocus application"
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Radar",
+      "Signal Processing",
+      "GPU",
+      "Accelerated Computing",
+      "Synthetic Aperture Radar",
+      "Autofocus"
+    ],
+    "ranking": 3,
+    "requirements": {},
+    "default_mode": "default",
+    "modes": {
+      "default": {
+        "description": "Run the SAR Figure 2 autofocus pipeline",
+        "run": {
+          "command": "python3.12 -m holoscan_radar.applications.cli autofocus",
+          "workdir": "<holohub_app_source>/../config",
+          "env": {
+            "PYTHONPATH": "/usr/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",
+            "HOLOSCAN_LIB_PATH": "/usr/lib"
+          }
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=autofocus",
+            "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
+            "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
+          ]
+        }
+      }
+    }
+  }
+}

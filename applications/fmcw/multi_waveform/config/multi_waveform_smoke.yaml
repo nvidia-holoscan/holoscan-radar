@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+extends: multi_waveform.yaml
+app:
+    run:
+        num_frames: 2
+    visualization:
+        enabled: false
+    targets:
+        - range: 35.0
+          azimuth: 0.15
+          elevation: 0.1
+          velocity: [-4.14944, 0.38877, -0.4]
+          amplitude: 0.8
+    range_loss: null

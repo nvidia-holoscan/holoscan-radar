@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export HOLOSCAN_CLI_ROOT="${repo_root}"
+export HOLOSCAN_CLI_CMD_NAME="./holoscan-radar"
+export HOLOSCAN_CLI_BASE_IMAGE="${HOLOSCAN_CLI_BASE_IMAGE:-nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13}"
+export HOLOSCAN_CLI_CTEST_SCRIPT="${HOLOSCAN_CLI_CTEST_SCRIPT:-ci/container.ctest}"
+
+# The CLI auto-mounts a sibling SDK checkout. Keep its headers, libraries, and
+# Python package out of image-backed builds unless the caller selected an SDK.
+local_sdk_requested=false
+for arg in "$@"; do
+    case "${arg}" in
+        --local-sdk-root | --local-sdk-root=*)
+            local_sdk_requested=true
+            ;;
+    esac
+done
+if [[ "${local_sdk_requested}" == false && -z "${HOLOSCAN_SDK_ROOT:-}" &&
+      -z "${HOLOSCAN_CLI_DEFAULT_DOCKER_RUN_ARGS+x}" &&
+      -d "${repo_root}/../holoscan-sdk" ]]; then
+    export HOLOSCAN_CLI_DEFAULT_DOCKER_RUN_ARGS='-e HOLOSCAN_SDK_ROOT=/usr -e HOLOSCAN_LIB_PATH= -e CMAKE_PREFIX_PATH=/usr -e PYTHONPATH=/usr/lib/python3.12/site-packages'
+fi
+
+venv_cli="${repo_root}/.venv/bin/holoscan"
+cli=""
+if [[ -x "${venv_cli}" ]]; then
+    shebang=""
+    IFS= read -r shebang < "${venv_cli}" || true
+    interpreter="${shebang#\#!}"
+    interpreter="${interpreter%% *}"
+    if [[ "${shebang}" == '#!'* && -x "${interpreter}" ]]; then
+        cli="${venv_cli}"
+    fi
+fi
+if [[ -z "${cli}" ]]; then
+    cli="$(command -v holoscan || true)"
+fi
+if [[ -z "${cli}" ]]; then
+    echo "error: Holoscan CLI is not installed; see DEVELOPER.md#holoscan-cli" >&2
+    exit 127
+fi
+
+exec "${cli}" "$@"

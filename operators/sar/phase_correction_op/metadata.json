@@ -1,0 +1,27 @@
+{
+    "$schema": "urn:holohub:operator:v1",
+    "operator": {
+        "name": "PhaseCorrectionOp",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "1.0.0",
+        "changelog": {
+            "0.1.0": "Initial Release (broadcast per-pulse phase; sense subtract/add)",
+            "0.1.1": "wait_for_downstream Param (default false); required emits fail-fast unless opted in",
+            "0.1.2": "remove wait_for_downstream; required emits fail-fast"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "4.3.0",
+            "tested_versions": ["4.3.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "SAR", "Autofocus", "Phase Correction"],
+        "ranking": 3,
+        "requirements": {}
+    }
+}

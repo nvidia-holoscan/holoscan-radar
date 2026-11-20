@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+extends: siso.yaml
+app:
+    run:
+        num_frames: 2
+    visualization:
+        enabled: false
+    targets:
+        - range: 245.0
+          velocity: -6.5006
+          amplitude: 0.8
+    range_loss: null

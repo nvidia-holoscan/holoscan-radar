@@ -1,0 +1,33 @@
+{
+    "$schema": "urn:holohub:operator:v1",
+    "operator": {
+        "name": "PhaseShiftBeamformerOp",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "1.0.0",
+        "changelog": {
+            "0.9.0": "Rename convention-dependent scan parameters and live ports to az_coordinates and el_coordinates",
+            "0.8.0": "Reject non-finite scan coordinates and direction-cosine axis values outside [-1, 1]",
+            "0.7.0": "Apply non-custom aperture tapers separably on recognized filled URAs",
+            "0.6.0": "Emit optional effective azimuth and elevation grids",
+            "0.5.0": "Add inline timing for all four live steering overrides",
+            "0.4.0": "Document radar_boresight as the default angle convention",
+            "0.3.0": "Tick-shell cleanup, exact rank-3 input, extent checks, and complete steering-cache identity",
+            "0.2.0": "HSDK 5 migration: Operator<Params>, typed Tensor ports, Params-only live descriptors",
+            "0.1.0": "Initial Release"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "5.0.0",
+            "tested_versions": ["5.0.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Angle", "Beamforming", "GPU", "SIMO", "MIMO"],
+        "ranking": 3,
+        "requirements": {}
+    }
+}

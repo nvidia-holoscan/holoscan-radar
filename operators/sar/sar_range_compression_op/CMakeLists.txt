@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+add_library(sar_range_compression_op sar_range_compression_op.cu)
+add_library(holoscan::sar_range_compression_op ALIAS sar_range_compression_op)
+
+target_include_directories(sar_range_compression_op PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators>
+    $<INSTALL_INTERFACE:include>)
+
+target_link_libraries(sar_range_compression_op
+    PUBLIC
+        holoscan::core
+        holoscan::radar_common
+        holoscan::radar_schemas
+    PRIVATE
+        matx::matx)
+
+holoscan_radar_set_library_properties(sar_range_compression_op)
+
+install(TARGETS sar_range_compression_op
+    EXPORT holoscan_radar_targets
+)
+
+include(GNUInstallDirs)
+install(FILES sar_range_compression_op.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/sar
+)

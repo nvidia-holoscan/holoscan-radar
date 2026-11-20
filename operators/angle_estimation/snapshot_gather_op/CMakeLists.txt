@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+add_library(snapshot_gather_op snapshot_gather_op.cu)
+add_library(holoscan::snapshot_gather_op ALIAS snapshot_gather_op)
+
+target_include_directories(snapshot_gather_op PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators>
+    $<INSTALL_INTERFACE:include>)
+
+target_link_libraries(snapshot_gather_op
+    PUBLIC
+        holoscan::core
+        holoscan::radar_common)
+
+holoscan_radar_set_library_properties(snapshot_gather_op)
+
+install(TARGETS snapshot_gather_op
+    EXPORT holoscan_radar_targets
+)
+
+include(GNUInstallDirs)
+install(FILES snapshot_gather_op.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/angle_estimation
+)

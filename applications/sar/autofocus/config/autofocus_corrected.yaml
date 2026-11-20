@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Inject a 2 cm look-axis quadratic on 8000 Kourou pulses and recover with PGA.
+# The 1000-sample first window is 0.125 of the polar azimuth extent.
+# Save outputs in a scenario-specific directory beside the executable.
+# See ../README.md for the three-image comparison.
+
+cphd:
+  path: sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd
+  names:
+  - Kourou
+  sidecar: ''
+sample_geometry:
+  origin:
+  - 3841933.189411493
+  - -5058154.964524482
+  - 577176.8448190973
+  axis_v:
+  - 0.05516103300897359
+  - -0.07258334219257478
+  - -0.9958357891106036
+  axis_u:
+  - 0.7961743851579871
+  - 0.6050672263627416
+  - 0.0
+  spacing:
+  - 0.25
+  - 0.25
+  counts:
+  - 2048
+  - 2048
+reference_frequency: 9.599952868e9
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 1024
+  pulse_range:
+  - 0
+  - 8000
+aperture_manager:
+  max_aperture_pulses: 8000
+  emit_interval_pulses: 0
+  emit_mode: reform
+range_compression:
+  propagation_speed: 299792458.0
+backprojection:
+  coordinate_frame: ecef
+autofocus:
+  azimuth_axis: u
+  min_scatterers: 16
+  window_fraction: 0.125
+phase_correction:
+  sense: subtract
+aux_lattice:
+  mode: polar
+position_error:
+  axis: look
+  polynomial:
+  - 0
+  - 0
+  - 0.02
+  score_warn_rms_rad: 0.39
+dump: true
+output:
+  path: outputs/corrected/autofocus_corrected_{index}.npy
+
+app:
+  visualization:
+    enabled: false

@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+add_library(root_music_estimator_op
+    root_music_estimator_op.cu)
+add_library(holoscan::root_music_estimator_op ALIAS root_music_estimator_op)
+
+target_include_directories(root_music_estimator_op PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators>
+    $<INSTALL_INTERFACE:include>)
+
+target_link_libraries(root_music_estimator_op
+    PUBLIC
+        holoscan::core
+        holoscan::radar_common
+        holoscan::radar_common_spatial_smoothing
+        holoscan::radar_common_source_count
+        holoscan::radar_schemas
+    PRIVATE
+        matx::matx
+        CUDA::cusolver)
+
+holoscan_radar_set_library_properties(root_music_estimator_op)
+
+install(TARGETS root_music_estimator_op
+    EXPORT holoscan_radar_targets
+)
+
+include(GNUInstallDirs)
+install(FILES root_music_estimator_op.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/angle_estimation
+)

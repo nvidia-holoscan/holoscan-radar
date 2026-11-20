@@ -1,0 +1,118 @@
+{
+  "$schema": "urn:holohub:application:v1",
+  "application": {
+    "name": "adaptive_aoa",
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "language": [
+      "C++"
+    ],
+    "version": "1.0.0",
+    "changelog": {
+      "0.1.0": "Selective super-resolution AoA demonstration"
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Radar",
+      "Signal Processing",
+      "GPU",
+      "FMCW",
+      "MIMO",
+      "TDM",
+      "AoA"
+    ],
+    "ranking": 3,
+    "requirements": {},
+    "default_mode": "default",
+    "modes": {
+      "default": {
+        "description": "Adaptive angle estimation with MUSIC",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa",
+          "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
+        }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_smoke.yaml",
+          "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
+        }
+      },
+      "root_music": {
+        "description": "Adaptive angle estimation with Root-MUSIC",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_root_music.yaml",
+          "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
+        }
+      },
+      "esprit": {
+        "description": "Adaptive angle estimation with ESPRIT",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_esprit.yaml",
+          "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
+        }
+      },
+      "mvdr": {
+        "description": "Adaptive angle estimation with MVDR",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_mvdr.yaml",
+          "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
+        }
+      }
+    }
+  }
+}

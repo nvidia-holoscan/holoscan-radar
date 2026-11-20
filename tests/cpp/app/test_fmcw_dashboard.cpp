@@ -1,0 +1,1247 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <gtest/gtest.h>
+
+#include <cuda_runtime_api.h>
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <optional>
+#include <memory>
+#include <limits>
+#include <ostream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+#include <variant>
+
+#include <holoscan/core/compile.hpp>
+#include <holoscan/core/graph.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/sensor_io/schemas/image_schema_traits.hpp>
+#include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
+#include <holoscan/visualization/holoviz_op.hpp>
+
+#include "radar_app/app/angle_presentation.hpp"
+#include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/application_descriptions.hpp"
+#include "radar_app/sar/sar_overlay.hpp"
+#include "radar_app/viz/fmcw_dashboard_op.hpp"
+#include "radar_app/viz/dashboard_text.hpp"
+#include "radar_app/viz/fmcw_holoviz_op.hpp"
+#include "radar_app/viz/image_device_bridge_op.hpp"
+#include "radar_app/viz/image_fit.hpp"
+#include "radar_app/viz/frame_viewport.hpp"
+#include "radar_app/viz/frame_composer_op.hpp"
+#include "radar_app/viz/presentation_graph.hpp"
+#include "radar_app/viz/rgba_image_bridge_op.hpp"
+#include "utils/tensor_fixtures.hpp"
+#include "utils/fixture_completion.hpp"
+
+namespace {
+
+namespace viz = holoscan::radar::app::viz;
+namespace radar = holoscan::radar;
+
+class RgbaGraphSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.output(text).produces_tensor(holoscan::TensorOutputSpec{
+        .representation = {.memory_kind = holoscan::MemoryKind::kHost,
+                           .dtype = DLDataType{kDLUInt, 8U, 1U},
+                           .rank = 2U,
+                           .strides = holoscan::TensorStridePolicy::kContiguousOnly},
+        .bounds = holoscan::TensorBounds{.max_rank = 2U, .max_byte_span = 208U},
+    });
+    spec.output(rgba).produces_tensor(holoscan::TensorOutputSpec{
+        .representation =
+            holoscan::TensorRepresentation{
+                .memory_kind = holoscan::MemoryKind::kCudaDevice,
+                .dtype = DLDataType{kDLUInt, 8U, 1U},
+                .rank = 3U,
+                .strides = holoscan::TensorStridePolicy::kContiguousOnly,
+            },
+        .bounds = holoscan::TensorBounds{.max_rank = 3U, .max_byte_span = 16U},
+    });
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = std::chrono::milliseconds{10}});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext&) override {
+    return {};
+  }
+
+  holoscan::Output<holoscan::Tensor> rgba{"rgba"};
+  holoscan::Output<holoscan::Tensor> text{"text"};
+};
+
+TEST(FmcwDashboardTest, ConnectsImageAndNativeHostTextToHsdk5Holoviz) {
+  holoscan::Graph graph{"dashboard-image-bridge-test"};
+  auto source = graph.op<RgbaGraphSourceOp>("source");
+  auto bridge = graph.op<viz::RgbaImageBridgeOp>("bridge", 2, 2);
+  auto frame = graph.op<viz::FmcwFrameComposerOp>("frame", 2, 2);
+  auto sink = graph.op<viz::FmcwHolovizOp>("holoviz", 2, 2, "test");
+  graph.partition("application").add(source).add(bridge);
+  graph.partition("visualization").add(frame).add(sink);
+  graph.add_flow(source->rgba, bridge->rgba);
+  graph.add_flow(bridge->image, frame->image_layer_input(0));
+  graph.add_flow(frame->output(), sink->image_layer_input(0));
+  graph.add_flow(source->text, frame->tensor_layer_input(1));
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source", .output_port = "rgba", .device = holoscan::DeviceId{0}});
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "bridge", .output_port = "image", .device = holoscan::DeviceId{0}});
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "frame", .output_port = "output", .device = holoscan::DeviceId{0}});
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
+  EXPECT_TRUE(plan.ok()) << plan.json();
+}
+
+TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  const holoscan::DeviceId device{radar::app::application_device()};
+  constexpr std::int64_t kWidth = 128;
+  constexpr std::int64_t kHeight = 64;
+  constexpr DLDataType kRgba{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> pixels(kWidth * kHeight * 4U);
+  for (std::size_t i = 0; i < pixels.size(); i += 4U) {
+    pixels[i] = 10U;
+    pixels[i + 1U] = 20U;
+    pixels[i + 2U] = 30U;
+    pixels[i + 3U] = 255U;
+  }
+  holoscan::schema::ImageT image;
+  image.width = kWidth;
+  image.height = kHeight;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data = radar::testing::to_device_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  std::vector<std::uint8_t> records;
+  viz::detail::append_dashboard_text(&records, kWidth, kHeight, 8.0F, 8.0F, "123", 13.0F);
+  const auto text = radar::testing::to_pageable_host_tensor(
+      records, {1, static_cast<std::int64_t>(viz::detail::kDashboardTextRowBytes)}, kRgba);
+  auto harness = holoscan::testing::create_operator_test<viz::FmcwFrameComposerOp>(
+      static_cast<std::int32_t>(kWidth), static_cast<std::int32_t>(kHeight));
+  // Unmatched samples must not render. The matched frame deliberately publishes
+  // its image first, so rendering cannot rely on sideband-before-driver order.
+  harness.push_frame(frame_at(std::chrono::milliseconds{1}, input("image", image)));
+  harness.push_frame(frame_at(std::chrono::milliseconds{2}, input("text", *text)));
+  harness.push_frame(
+      frame_at(std::chrono::milliseconds{3}, input("image", image), input("text", *text)));
+  harness.input_source_device("image", device);
+  harness.output_device("output", device);
+  harness.capture_snapshot<holoscan::schema::ImageT>("output", 1U, pixels.size());
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "output", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto composed = result.snapshot<holoscan::schema::ImageT>("output");
+  const auto output =
+      radar::testing::to_host(composed.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(output.shape, (std::vector<std::int64_t>{kHeight, kWidth, 4}));
+  const auto* rgba = output.as<std::uint8_t>();
+  const std::size_t corner = 4U * (kWidth * kHeight - 1U);
+  for (std::size_t channel = 0; channel < 4U; ++channel) {
+    EXPECT_EQ(rgba[corner + channel], pixels[corner + channel]);
+  }
+  bool found_native_text = false;
+  for (std::size_t row = 8U; row < 24U; ++row) {
+    for (std::size_t col = 8U; col < 40U; ++col) {
+      found_native_text = found_native_text || rgba[4U * (row * kWidth + col)] > 128U;
+    }
+  }
+  EXPECT_TRUE(found_native_text) << "SDK text must be present in the emitted GPU image";
+}
+
+TEST(SarFooterStatus, ComposesMatchedStatusBelowTheUnobscuredImage) {
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  namespace sar = radar::app::sar;
+  constexpr int width = 640, ih = 64, fh = 112;
+  constexpr DLDataType rgba_type{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> pixels(width * ih * 4, 255);
+  for (int y = 0; y < ih; ++y) {
+    for (int x = 0; x < width; ++x) {
+      pixels[4 * (y * width + x)] = x < width / 2 ? 40 : 160;
+      pixels[4 * (y * width + x) + 1] = y < ih / 2 ? 60 : 180;
+    }
+  }
+  holoscan::schema::ImageT image;
+  image.width = width;
+  image.height = ih;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data = radar::testing::to_device_tensor(pixels, {ih, width, 4}, rgba_type);
+  std::vector<std::uint8_t> records(sar::kHudRuns * sar::kHudRowBytes);
+  sar::OverlayConfig layout;
+  layout.status_width = 320;
+  layout.footer_height = fh;
+  layout.canvas_width = width;
+  layout.image_height = ih;
+  sar::FormationDiag diagnostic;
+  diagnostic.collection_elapsed_s = 94.7;
+  diagnostic.bp_compute_s = 8.2;
+  diagnostic.budget_s = 2.4;
+  diagnostic.budget_playback_rate = 0.2;
+  diagnostic.pulses = 1000;
+  diagnostic.pixels = 315700000;
+  sar::write_footer_hud_rows(records.data(),
+                             {std::string(64, 'W') + "  64 x 640", "8.2s  38.5 Gpx*pulse/s",
+                              sar::format_form_latency(0.8)},
+                             diagnostic, false, layout);
+  holoscan::visualization::TextRunHeader primary{}, secondary{};
+  std::memcpy(&primary, records.data(), sizeof(primary));
+  std::memcpy(&secondary, records.data() + 3 * sar::kHudRowBytes, sizeof(secondary));
+  EXPECT_GT(primary.size_px, secondary.size_px);
+  auto row_text = [&](std::size_t row) {
+    return reinterpret_cast<const char*>(records.data() + row * sar::kHudRowBytes +
+                                         sar::kTextRunHeaderBytes);
+  };
+  EXPECT_STREQ(row_text(1), "64 x 640 pixels  1,000 pulses");
+  EXPECT_STREQ(row_text(2), "BP work: 315.7 Gpx*pulses");
+  EXPECT_STREQ(row_text(3), "Latency: 8.2s / 12.0s @0.2x");
+  // Both metrics use actual BP work, not acquisition wall time, final-batch
+  // latency, display dimensions, or a differently rounded report sample.
+  EXPECT_STREQ(row_text(4), "Throughput: 38.5 Gpx*pulses/sec");
+  EXPECT_STREQ(row_text(5), "");
+  const auto text = radar::testing::to_pageable_host_tensor(
+      records, {sar::kHudRuns, sar::kHudRowBytes}, rgba_type);
+  auto harness = holoscan::testing::create_operator_test<viz::FrameComposerOp>(
+      width, ih + fh, sar::kHudMaxGlyphs, true, 0U, 0, ih);
+  harness.push_frame(frame_at(std::chrono::milliseconds{1}, input("image", image)));
+  harness.push_frame(frame_at(std::chrono::milliseconds{2}, input("text", *text)));
+  harness.push_frame(
+      frame_at(std::chrono::milliseconds{3}, input("image", image), input("text", *text)));
+  const holoscan::DeviceId device{radar::app::application_device()};
+  harness.input_source_device("image", device);
+  harness.output_device("output", device);
+  harness.capture_snapshot<holoscan::schema::ImageT>("output", 1U, width * (ih + fh) * 4);
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "output", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto composed = result.snapshot<holoscan::schema::ImageT>("output");
+  const auto output =
+      radar::testing::to_host(composed.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(output.shape, (std::vector<std::int64_t>{ih + fh, width, 4}));
+  const auto* rgba = output.as<std::uint8_t>();
+  int status_pixels = 0;
+  for (int y = 0; y < ih + fh; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const auto value = rgba[4 * (y * width + x)];
+      if (y < ih) {
+        for (int channel = 0; channel < 4; ++channel)
+          ASSERT_EQ(rgba[4 * (y * width + x) + channel], pixels[4 * (y * width + x) + channel])
+              << "Status must not obscure, crop, or rescale the SAR image";
+      } else if (x >= layout.status_width) {
+        ASSERT_EQ(value, 0U) << "Status must not overlap the timeline";
+      } else if (value > 100U) {
+        ++status_pixels;
+      }
+    }
+  }
+  EXPECT_GT(status_pixels, 100) << "SDK text must render in the footer";
+}
+
+TEST(ImageDeviceBridgeTest, PreservesPixelsAndMetadataThroughHostStaging) {
+  using holoscan::schema::ImageT;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  constexpr DLDataType kRgba{kDLUInt, 8U, 1U};
+  constexpr int kWidth = 17;
+  constexpr int kHeight = 9;
+  const auto time = std::chrono::milliseconds{123};
+  int original = -1;
+  ASSERT_EQ(cudaGetDevice(&original), cudaSuccess);
+  int count = 0;
+  ASSERT_EQ(cudaGetDeviceCount(&count), cudaSuccess);
+  ASSERT_GT(count, 0);
+  std::vector<std::uint8_t> pixels(kWidth * kHeight * 4);
+  for (std::size_t i = 0; i < pixels.size(); ++i)
+    pixels[i] = static_cast<std::uint8_t>(i * 17U + 3U);
+  ImageT image;
+  image.width = kWidth;
+  image.height = kHeight;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.color_space = holoscan::schema::ColorSpace_SRGB;
+  image.data = radar::testing::to_device_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  auto download =
+      holoscan::testing::create_operator_test<viz::ImageDownloadOp>(kWidth + 5, kHeight + 3);
+  download.push_frame(frame_at(time, input("image_in", image)));
+  download.input_source_device("image_in", holoscan::DeviceId{original});
+  download.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion download_completion;
+  auto downloading = download.run_async(download_completion.run_options());
+  (void)download_completion.wait_for_output(downloading, "image_out", 1U);
+  downloading.request_stop();
+  const auto downloaded = downloading.finish();
+  download_completion.check(downloaded);
+  ASSERT_TRUE(downloaded.ok()) << downloaded.describe_failure();
+  const auto host_frame = downloaded.snapshot<ImageT>("image_out");
+  const auto host_pixels =
+      radar::testing::to_host(host_frame.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(host_pixels.data.size(), pixels.size());
+  ASSERT_EQ(std::memcmp(host_pixels.data.data(), pixels.data(), pixels.size()), 0);
+  auto host_image = host_frame.metadata();
+  EXPECT_EQ(host_image.color_space, image.color_space);
+  const auto host_tensor =
+      radar::testing::to_pageable_host_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  host_image.data = host_tensor;
+  auto upload =
+      holoscan::testing::create_operator_test<viz::ImageUploadOp>(kWidth + 5, kHeight + 3);
+  upload.push_frame(frame_at(time, input("image_in", host_image)));
+  upload.output_device("image_out", holoscan::DeviceId{count - 1});
+  upload.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion upload_completion;
+  auto uploading = upload.run_async(upload_completion.run_options());
+  (void)upload_completion.wait_for_output(uploading, "image_out", 1U);
+  uploading.request_stop();
+  const auto uploaded = uploading.finish();
+  upload_completion.check(uploaded);
+  ASSERT_TRUE(uploaded.ok()) << uploaded.describe_failure();
+  const auto result = uploaded.snapshot<ImageT>("image_out");
+  const auto actual =
+      radar::testing::to_host(result.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(actual.data.size(), pixels.size());
+  EXPECT_EQ(std::memcmp(actual.data.data(), pixels.data(), pixels.size()), 0);
+  EXPECT_EQ(result.metadata().width, kWidth);
+  EXPECT_EQ(result.metadata().height, kHeight);
+  EXPECT_EQ(result.metadata().encoding, image.encoding);
+  EXPECT_EQ(result.metadata().color_space, image.color_space);
+  EXPECT_EQ(result.sample_metadata().capture_time().timestamp_ns,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(time).count());
+}
+
+TEST(FmcwDashboardTest, BoundsWideFooterTextureByItsActualHeight) {
+  viz::FrameComposerOp composer(8192, 112, 4096U);
+  const auto& layer = std::get<holoscan::visualization::ImageLayerDesc>(
+      composer.layer_stack().layers().front().desc);
+  EXPECT_EQ(layer.max_width, 8192U);
+  EXPECT_EQ(layer.max_height, 112U);
+}
+
+TEST(ImageDeviceBridgeTest, CropsOnlyVisibleFooterRowsAndPreservesCaptureTime) {
+  using holoscan::schema::ImageT;
+  constexpr int width = 17, height = 9, visible_width = 7, visible_height = 4;
+  std::vector<std::uint8_t> pixels(width * height * 4);
+  for (std::size_t i = 0; i < pixels.size(); ++i)
+    pixels[i] = static_cast<std::uint8_t>(i * 17U + 3U);
+  ImageT image;
+  image.width = width;
+  image.height = height;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data =
+      radar::testing::to_device_tensor(pixels, {height, width, 4}, DLDataType{kDLUInt, 8U, 1U});
+  auto viewport =
+      std::make_shared<viz::FrameViewport>(visible_width, visible_height, width, height);
+  viewport->drawn(123000000, visible_width, visible_height);
+  viewport->set(width, height);  // Resize raced ahead of this completed frame.
+  auto harness =
+      holoscan::testing::create_operator_test<viz::ImageDownloadOp>(width, height, viewport);
+  harness.push_frame(holoscan::testing::frame_at(std::chrono::milliseconds{123},
+                                                 holoscan::testing::input("image_in", image)));
+  harness.input_source_device("image_in", holoscan::DeviceId{radar::app::application_device()});
+  harness.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "image_out", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frame = result.snapshot<ImageT>("image_out");
+  const auto actual =
+      radar::testing::to_host(frame.tensor(holoscan::schema::ImageTensorFields::data));
+  EXPECT_EQ(frame.metadata().width, visible_width);
+  EXPECT_EQ(frame.metadata().height, visible_height);
+  ASSERT_EQ(actual.data.size(), visible_width * visible_height * 4U);
+  for (int y = 0; y < visible_height; ++y)
+    EXPECT_EQ(std::memcmp(actual.data.data() + y * visible_width * 4, pixels.data() + y * width * 4,
+                          visible_width * 4),
+              0);
+  EXPECT_EQ(frame.sample_metadata().capture_time().timestamp_ns, 123000000);
+  viewport->set(width * 2, height * 2);
+  EXPECT_EQ(viewport->get(), (std::pair{width, height}));
+  viewport->set(0, 0);
+  EXPECT_EQ(viewport->get(), (std::pair{1, 1}));
+  for (int i = 0; i < 65; ++i)
+    viewport->drawn(i, 1, 1);
+  EXPECT_FALSE(viewport->drawn(123000000));
+  EXPECT_EQ(viewport->drawn(64), (std::pair{1, 1}));
+}
+
+struct PowerLegendCase {
+  float power;
+  const char* lower;
+  const char* upper;
+};
+
+void PrintTo(const PowerLegendCase& value, std::ostream* stream) {
+  *stream << value.power;
+}
+
+class FmcwDashboardPowerTest : public ::testing::TestWithParam<PowerLegendCase> {};
+
+TEST_P(FmcwDashboardPowerTest, ComposesHeatmapWithMatchingPowerLegend) {
+  using Op = viz::FmcwDashboardOp;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  using radar::testing::to_device_tensor;
+  constexpr DLDataType kFloat{kDLFloat, 32U, 1U};
+  constexpr DLDataType kInt{kDLInt, 64U, 1U};
+  viz::FmcwDashboardConfig config;
+  config.show_angles = false;
+  config.title = "FMCW test";
+  config.description = radar::app::application_description("adaptive_aoa", "root_music");
+  auto harness = holoscan::testing::create_operator_test<Op>(config);
+  harness.push_frame(frame_at(
+      std::chrono::milliseconds{1},
+      input("cfar_power",
+            *to_device_tensor(std::vector<float>(4U, GetParam().power), {2, 2}, kFloat)),
+      input("detection_idx", *to_device_tensor(std::vector<std::int64_t>{}, {0, 2}, kInt)),
+      input("points", *to_device_tensor(std::vector<float>{}, {0, 2}, kFloat)),
+      input("range_bins", *to_device_tensor(std::vector<float>{0.0F, 100.0F}, {2}, kFloat)),
+      input("velocity_bins", *to_device_tensor(std::vector<float>{-10.0F, 10.0F}, {2}, kFloat))));
+  harness.capture_snapshot<holoscan::Tensor>("rgba", 1U, 1280U * 720U * 4U);
+  harness.capture_snapshot<holoscan::Tensor>(
+      "text", 1U, viz::detail::kDashboardTextRows * viz::detail::kDashboardTextRowBytes);
+  for (const auto* port :
+       {"cfar_power", "detection_idx", "points", "range_bins", "velocity_bins"}) {
+    harness.input_source_device(port, holoscan::DeviceId{0});
+  }
+  harness.output_device("rgba", holoscan::DeviceId{0});
+  auto running = harness.run_async({.expect_stop = true});
+  const bool image_ready = running.wait_for_output("rgba", 1U, std::chrono::seconds{5});
+  const bool text_ready = running.wait_for_output("text", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(image_ready && text_ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto image = radar::testing::to_host(result.snapshot<holoscan::Tensor>("rgba"));
+  const auto* pixels = image.as<std::uint8_t>();
+  EXPECT_EQ(image.shape, (std::vector<std::int64_t>{720, 1280, 4}));
+  // Equal positive power reaches the palette maximum throughout the RD interior.
+  const std::size_t center = 4U * (300U * 1280U + 300U);
+  EXPECT_EQ(pixels[center], 253U);
+  EXPECT_EQ(pixels[center + 1U], 231U);
+  EXPECT_EQ(pixels[center + 2U], 37U);
+  for (std::size_t i = 3U; i < image.data.size(); i += 4U) {
+    ASSERT_EQ(pixels[i], 255U) << "transparent canvas pixel " << i / 4U;
+  }
+  const auto text = radar::testing::to_host(result.snapshot<holoscan::Tensor>("text"));
+  ASSERT_EQ(text.shape.size(), 2U);
+  EXPECT_EQ(text.shape[1], viz::detail::kDashboardTextRowBytes);
+  EXPECT_GT(text.shape[0], 10);
+  EXPECT_STREQ(reinterpret_cast<const char*>(text.data.data() +
+                                             holoscan::visualization::kTextRunHeaderBytes),
+               "FMCW test");
+  std::vector<std::string> labels;
+  for (std::size_t offset = 0; offset < text.data.size();
+       offset += viz::detail::kDashboardTextRowBytes) {
+    labels.emplace_back(reinterpret_cast<const char*>(
+        text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
+  }
+  ASSERT_GT(labels.size(), 2U);
+  EXPECT_NE(std::find(labels.begin(), labels.end(), config.description), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), "Frame 1 (0.0 s) | 0 detections"),
+            labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), GetParam().lower), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), GetParam().upper), labels.end());
+}
+
+// A 100x power change moves both legend endpoints by 20 dB while retaining
+// the same 60 dB span and peak color in the CUDA image.
+INSTANTIATE_TEST_SUITE_P(PowerLevels, FmcwDashboardPowerTest,
+                         ::testing::Values(PowerLegendCase{1.0F, "-60.0", "0.0 dB"},
+                                           PowerLegendCase{100.0F, "-40.0", "20.0 dB"},
+                                           PowerLegendCase{0.01F, "-80.0", "-20.0 dB"}));
+
+class FmcwDashboardBackgroundTest : public ::testing::TestWithParam<int> {};
+
+TEST_P(FmcwDashboardBackgroundTest, MasksDetectionCrossesAndProjectsLeadingPlanes) {
+  using Op = viz::FmcwDashboardOp;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  using radar::testing::to_device_tensor;
+  constexpr DLDataType kFloat{kDLFloat, 32U, 1U};
+  constexpr DLDataType kInt{kDLInt, 64U, 1U};
+  viz::FmcwDashboardConfig config;
+  config.show_angles = false;
+  config.title = "FMCW test";
+  config.noise_sample_limit = 256;
+  config.noise_doppler_half_width = 1;
+  config.noise_range_half_width = 1;
+  const int planes = GetParam();
+  std::vector<float> powers(planes * 256, 100.0F);
+  for (int plane = 0; plane < planes; ++plane) {
+    for (int d = 0; d < 16; ++d) {
+      for (int r = 0; r < 16; ++r) {
+        powers[plane * 256 + d * 16 + r] =
+            d == 4 || r == 5 ? 1.0e12F
+                             : (plane + 1) * std::pow(10.0F, ((d + r) % 2 ? 23.0F : 17.0F) / 10.0F);
+      }
+    }
+  }
+  std::vector<float> bins(16);
+  for (int i = 0; i < 16; ++i)
+    bins[i] = static_cast<float>(i);
+  auto harness = holoscan::testing::create_operator_test<Op>(config);
+  harness.push_frame(frame_at(
+      std::chrono::milliseconds{1},
+      input("cfar_power", *to_device_tensor(powers, {planes, 16, 16}, kFloat)),
+      input("detection_idx", *to_device_tensor(std::vector<std::int64_t>{0, 4, 5}, {1, 3}, kInt)),
+      input("points", *to_device_tensor(std::vector<float>{5.0F, 4.0F}, {1, 2}, kFloat)),
+      input("range_bins", *to_device_tensor(bins, {16}, kFloat)),
+      input("velocity_bins", *to_device_tensor(bins, {16}, kFloat))));
+  harness.capture_snapshot<holoscan::Tensor>("rgba", 1U, 1280U * 720U * 4U);
+  harness.capture_snapshot<holoscan::Tensor>(
+      "text", 1U, viz::detail::kDashboardTextRows * viz::detail::kDashboardTextRowBytes);
+  for (const auto* port :
+       {"cfar_power", "detection_idx", "points", "range_bins", "velocity_bins"}) {
+    harness.input_source_device(port, holoscan::DeviceId{0});
+  }
+  harness.output_device("rgba", holoscan::DeviceId{0});
+  auto running = harness.run_async({.expect_stop = true});
+  const bool image_ready = running.wait_for_output("rgba", 1U, std::chrono::seconds{5});
+  const bool text_ready = running.wait_for_output("text", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(image_ready && text_ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto image = radar::testing::to_host(result.snapshot<holoscan::Tensor>("rgba"));
+  const auto* pixels = image.as<std::uint8_t>();
+  // Ordinary background away from the detection cross must retain color,
+  // rather than clipping to the palette minimum (green = 1).
+  const std::size_t center = 4U * (300U * 1280U + 300U);
+  EXPECT_GT(pixels[center + 1U], 1U);
+  EXPECT_LT(pixels[center + 1U], 231U);
+  const auto text = radar::testing::to_host(result.snapshot<holoscan::Tensor>("text"));
+  ASSERT_EQ(text.shape.size(), 2U);
+  EXPECT_EQ(text.shape[1], viz::detail::kDashboardTextRowBytes);
+  EXPECT_GT(text.shape[0], 10);
+  EXPECT_STREQ(reinterpret_cast<const char*>(text.data.data() +
+                                             holoscan::visualization::kTextRunHeaderBytes),
+               "FMCW test");
+  std::vector<std::string> labels;
+  for (std::size_t offset = 0; offset < text.data.size();
+       offset += viz::detail::kDashboardTextRowBytes) {
+    labels.emplace_back(reinterpret_cast<const char*>(
+        text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
+  }
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "14.0" : "17.0"), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "32.0 dB" : "35.0 dB"),
+            labels.end());
+}
+
+INSTANTIATE_TEST_SUITE_P(Projection, FmcwDashboardBackgroundTest, ::testing::Values(1, 2));
+
+TEST(FmcwDashboardBackgroundStatsTest, EstimatesDbMomentsAndRejectsOutliers) {
+  std::vector<float> samples(256);
+  for (std::size_t i = 0; i < samples.size(); ++i)
+    samples[i] = i % 2 ? 19.0F : 21.0F;
+  samples.push_back(1000.0F);
+  samples.push_back(std::numeric_limits<float>::quiet_NaN());
+  const auto stats = viz::detail::background_statistics(samples);
+  ASSERT_TRUE(stats);
+  EXPECT_NEAR(stats->mean_db, 20.0F, 1e-5F);
+  EXPECT_NEAR(stats->stddev_db, 1.0F, 1e-5F);
+  EXPECT_EQ(stats->count, 256U);
+  EXPECT_FALSE(viz::detail::background_statistics(std::vector<float>(63, 20.0F)));
+  EXPECT_FALSE(viz::detail::background_statistics(
+      std::vector<float>(2048, std::numeric_limits<float>::quiet_NaN())));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, SmoothsHoldsAndExpiresToPeakFallback) {
+  viz::detail::BackgroundScaleState state;
+  const viz::detail::BackgroundStatistics background{20.0F, 1.0F, 256};
+  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0.0F, 0),
+            (std::array<float, 2>{-40.0F, 20.0F}));
+  EXPECT_EQ(state.limits(background, 1e12F, 60.0F, 2.0F, 0.0F, 0),
+            (std::array<float, 2>{18.0F, 22.0F}));
+  const auto moved = state.limits(viz::detail::BackgroundStatistics{30.0F, 1.0F, 256}, 1e12F, 60.0F,
+                                  2.0F, 0.0F, 250000000);
+  EXPECT_NEAR(moved[0], 18.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
+  EXPECT_NEAR(moved[1], 22.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
+  EXPECT_EQ(state.limits(std::nullopt, 1e12F, 60.0F, 2.0F, 0.0F, 750000000), moved);
+  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0.0F, 1250000001),
+            (std::array<float, 2>{-40.0F, 20.0F}));
+  EXPECT_EQ(state.limits(std::nullopt, 0.0F, 60.0F, 2.0F, 0.0F, 1500000000),
+            (std::array<float, 2>{-60.0F, 0.0F}));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, UsesSymmetricSigmaBandAndUpperOnlyHeadroom) {
+  const viz::detail::BackgroundStatistics background{20.0F, 3.0F, 256};
+  viz::detail::BackgroundScaleState symmetric;
+  EXPECT_EQ(symmetric.limits(background, 1e12F, 60.0F, 2.0F, 0.0F, 0),
+            (std::array<float, 2>{14.0F, 26.0F}));
+  viz::detail::BackgroundScaleState headroom;
+  EXPECT_EQ(headroom.limits(background, 1e12F, 60.0F, 2.0F, 12.0F, 0),
+            (std::array<float, 2>{14.0F, 38.0F}));
+  viz::detail::BackgroundScaleState narrower;
+  EXPECT_EQ(narrower.limits(background, 1e12F, 60.0F, 1.0F, 0.0F, 0),
+            (std::array<float, 2>{17.0F, 23.0F}));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, KeepsFlatBackgroundAndZeroSigmaLimitsFinite) {
+  for (const float deviation : {0.0F, 3.0F}) {
+    viz::detail::BackgroundScaleState state;
+    const auto limits = state.limits(viz::detail::BackgroundStatistics{20.0F, deviation, 256},
+                                     1e12F, 60.0F, 0.0F, 0.0F, 0);
+    EXPECT_TRUE(std::isfinite(limits[0]) && std::isfinite(limits[1]));
+    EXPECT_NEAR(limits[1] - limits[0], 0.1F, 1e-5F);
+    EXPECT_NEAR(0.5F * (limits[0] + limits[1]), 20.0F, 1e-5F);
+  }
+  viz::detail::BackgroundScaleState headroom;
+  EXPECT_EQ(headroom.limits(viz::detail::BackgroundStatistics{20.0F, 0.0F, 256}, 1e12F, 60.0F, 2.0F,
+                            12.0F, 0),
+            (std::array<float, 2>{20.0F, 32.0F}));
+}
+
+TEST(FmcwDashboardTextTest, EncodesNativeSdkRowsWithOwnedTextAndPixelPositions) {
+  std::vector<std::uint8_t> records;
+  std::string label = "Range (m)";
+  viz::detail::append_dashboard_text(&records, 1280, 720, 640.0F, 180.0F, label, 13.0F);
+  label = "changed";
+  viz::detail::append_dashboard_text(&records, 1280, 720, 20.0F, 43.0F, "Frame 2", 13.0F);
+  ASSERT_EQ(records.size(), 2U * viz::detail::kDashboardTextRowBytes);
+  holoscan::visualization::TextRunHeader header;
+  std::memcpy(&header, records.data(), sizeof(header));
+  EXPECT_FLOAT_EQ(header.x, 640.0F);
+  EXPECT_FLOAT_EQ(header.y, 180.0F);
+  EXPECT_FLOAT_EQ(header.size_px, 13.0F);
+  EXPECT_EQ(header.color >> 24U, 255U);
+  const auto* text = reinterpret_cast<const char*>(records.data() + sizeof(header));
+  EXPECT_STREQ(text, "Range (m)");
+  for (std::size_t i = sizeof(header) + 9U; i < viz::detail::kDashboardTextRowBytes; ++i) {
+    EXPECT_EQ(records[i], 0U);
+  }
+}
+
+TEST(FmcwDashboardTextTest, FitsLongWorkflowNamesAndEnforcesThePerFrameBudget) {
+  std::vector<std::uint8_t> records;
+  viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, std::string(400U, 'A'),
+                                     20.0F);
+  const auto* text =
+      reinterpret_cast<const char*>(records.data() + holoscan::visualization::kTextRunHeaderBytes);
+  const std::string displayed(text);
+  EXPECT_LT(displayed.size(), viz::detail::kDashboardTextBytes);
+  EXPECT_TRUE(displayed.ends_with("..."));
+  EXPECT_LE(20.0F + displayed.size() * 20.0F * 7.0F / 13.0F, 628.0F);
+  for (std::size_t i = 1U; i < viz::detail::kDashboardTextRows; ++i) {
+    viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, "x", 13.0F);
+  }
+  EXPECT_THROW(
+      viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, "overflow", 13.0F),
+      std::invalid_argument);
+}
+
+TEST(AnglePresentationTest, ConvertsDirectionCosinesToPhysicalAngles) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset = holoscan::radar::AngleConventionPreset::kDirectionCosine;
+  const auto angles = holoscan::radar::app::to_physical_angles(convention, 0.5, 0.25);
+  EXPECT_NEAR(angles.az, std::atan2(0.5, std::sqrt(0.6875)), 1e-12);
+  EXPECT_NEAR(angles.el, std::asin(0.25), 1e-12);
+}
+
+TEST(AnglePresentationTest, RejectsNonPhysicalDirectionCosinePair) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset = holoscan::radar::AngleConventionPreset::kDirectionCosine;
+  EXPECT_THROW(holoscan::radar::app::to_physical_angles(convention, 0.9, 0.9),
+               std::invalid_argument);
+}
+
+TEST(AnglePresentationTest, ComputesBoundsFromValidGridCombinations) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset = holoscan::radar::AngleConventionPreset::kDirectionCosine;
+  const auto bounds = holoscan::radar::app::physical_scan_grid_bounds(convention, {-1.0, 0.0, 1.0},
+                                                                      {-1.0, 0.0, 1.0});
+  EXPECT_NEAR(bounds.az[0], -1.5707963267948966, 1e-12);
+  EXPECT_NEAR(bounds.az[1], 1.5707963267948966, 1e-12);
+  EXPECT_NEAR(bounds.el[0], -1.5707963267948966, 1e-12);
+  EXPECT_NEAR(bounds.el[1], 1.5707963267948966, 1e-12);
+}
+
+TEST(AnglePresentationTest, ConvertsPhysicsSphericalToRadarBoresight) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset = holoscan::radar::AngleConventionPreset::kPhysicsSpherical;
+  const auto angles = holoscan::radar::app::to_physical_angles(convention, 0.3, 1.2);
+  EXPECT_NEAR(angles.az, 0.3, 1e-12);
+  EXPECT_NEAR(angles.el, 1.5707963267948966 - 1.2, 1e-12);
+}
+
+TEST(AnglePresentationTest, CentroidHandlesAzimuthWrap) {
+  holoscan::radar::app::PhysicalAngleCentroid centroid;
+  centroid.add(holoscan::radar::AngleConvention{}, 3.13, 0.1);
+  centroid.add(holoscan::radar::AngleConvention{}, -3.13, 0.1);
+  const auto angles = centroid.mean();
+  EXPECT_GT(std::abs(angles.az), 3.0);
+  EXPECT_NEAR(angles.el, 0.1, 1e-5);
+}
+
+TEST(FmcwDashboardTest, MatchesExactSelectedWaveformAndRejectsMissing) {
+  const holoscan::radar::FMCWWaveformDescriptor near(
+      holoscan::radar::FMCWWaveformSpec{.carrier_frequency = 77.0e9,
+                                        .bandwidth = 300.0e6,
+                                        .chirp_duration = 20.0e-6,
+                                        .sample_rate = 12.8e6,
+                                        .chirp_repetition_interval = 50.0e-6});
+  const holoscan::radar::FMCWWaveformDescriptor far(
+      holoscan::radar::FMCWWaveformSpec{.carrier_frequency = 77.0e9,
+                                        .bandwidth = 150.0e6,
+                                        .chirp_duration = 40.0e-6,
+                                        .sample_rate = 12.8e6,
+                                        .chirp_repetition_interval = 90.0e-6});
+  const auto near_wire = holoscan::radar::to_wire(near);
+  const auto far_wire = holoscan::radar::to_wire(far);
+
+  auto match = viz::detail::selected_profile_matches(near_wire, "near", near);
+  ASSERT_TRUE(match);
+  EXPECT_TRUE(*match);
+  auto mismatch = viz::detail::selected_profile_matches(far_wire, "near", near);
+  ASSERT_TRUE(mismatch);
+  EXPECT_FALSE(*mismatch);
+
+  const std::optional<holoscan::radar::wire::FMCWWaveformT> missing;
+  auto absent = viz::detail::selected_profile_matches(missing, "near", near);
+  EXPECT_FALSE(absent);
+  EXPECT_EQ(absent.error().code, holoscan::ErrorCode::kInvalidArgument);
+
+  auto unprofiled = viz::detail::selected_profile_matches(missing, "", {});
+  ASSERT_TRUE(unprofiled);
+  EXPECT_TRUE(*unprofiled);
+}
+
+TEST(FmcwRdHeatmapTest, MapsPeakAndDynamicRange) {
+  const std::vector<std::uint8_t> rgba =
+      viz::detail::make_heatmap_rgba_reference({1.0F, 1000000.0F}, {1, 2}, 60.0F);
+  ASSERT_EQ(rgba.size(), 8U);
+  EXPECT_EQ(rgba[0], 68U);
+  EXPECT_EQ(rgba[1], 1U);
+  EXPECT_EQ(rgba[2], 84U);
+  EXPECT_EQ(rgba[3], 255U);
+  EXPECT_EQ(rgba[4], 253U);
+  EXPECT_EQ(rgba[5], 231U);
+  EXPECT_EQ(rgba[6], 37U);
+  EXPECT_EQ(rgba[7], 255U);
+}
+
+TEST(FmcwRdHeatmapTest, DenseLeadingAxesUseMaxProjection) {
+  const std::vector<std::uint8_t> dense =
+      viz::detail::make_heatmap_rgba_reference({1.0F, 10.0F, 100.0F, 1.0F}, {2, 1, 1, 2}, 20.0F);
+  const std::vector<std::uint8_t> projected =
+      viz::detail::make_heatmap_rgba_reference({100.0F, 10.0F}, {1, 2}, 20.0F);
+  EXPECT_EQ(dense, projected);
+}
+
+TEST(FmcwRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
+  const auto low_range = viz::detail::rd_plot_position(1.0F, 0.0F, 4, 8);
+  const auto high_range = viz::detail::rd_plot_position(1.0F, 7.0F, 4, 8);
+  const auto later_doppler = viz::detail::rd_plot_position(2.0F, 0.0F, 4, 8);
+  EXPECT_LT(low_range[0], later_doppler[0]);
+  EXPECT_GT(low_range[1], high_range[1]);
+}
+
+TEST(FmcwRdHeatmapTest, ReversesMarkersWithDescendingPhysicalVelocityBins) {
+  const auto normal = viz::detail::rd_plot_position(1.0F, 2.0F, 8, 4);
+  const auto reversed = viz::detail::rd_plot_position(1.0F, 2.0F, 8, 4, true);
+  EXPECT_FLOAT_EQ(reversed[0], 1.0F - normal[0]);
+  EXPECT_FLOAT_EQ(reversed[1], normal[1]);
+}
+
+TEST(FmcwDashboardTest, UsesUpwardSemicircleForAtMost180DegreeCoverage) {
+  constexpr float kHalfPi = 1.57079632679489661923F;
+  EXPECT_TRUE(viz::detail::use_azimuth_sector({-0.3F, 0.3F}));
+  EXPECT_TRUE(viz::detail::use_azimuth_sector({-kHalfPi, kHalfPi}));
+  EXPECT_TRUE(viz::detail::use_azimuth_sector({-2.0F, 0.0F}));
+  EXPECT_FALSE(viz::detail::use_azimuth_sector({-2.0F, 2.0F}));
+}
+
+TEST(FmcwDashboardTest, NarrowSectorFillsPanelWidthAndHeight) {
+  const std::array<float, 2> bounds{-0.3F, 0.3F};
+  const auto left = viz::detail::sector_plot_position(1.0F, bounds[0], bounds);
+  const auto right = viz::detail::sector_plot_position(1.0F, bounds[1], bounds);
+  const auto far = viz::detail::sector_plot_position(1.0F, 0.0F, bounds);
+  const auto near = viz::detail::sector_plot_position(0.0F, 0.0F, bounds);
+  ASSERT_TRUE(left && right && far && near);
+  EXPECT_NEAR((*left)[0], 0.0F, 1.0e-6F);
+  EXPECT_NEAR((*right)[0], 1.0F, 1.0e-6F);
+  EXPECT_NEAR((*left)[1], 1.0F - std::cos(0.3F), 1.0e-6F);
+  EXPECT_EQ(*far, (std::array<float, 2>{0.5F, 0.0F}));
+  EXPECT_EQ(*near, (std::array<float, 2>{0.5F, 1.0F}));
+  const auto halfway = viz::detail::sector_plot_position(0.5F, 0.0F, bounds);
+  ASSERT_TRUE(halfway);
+  EXPECT_EQ(*halfway, (std::array<float, 2>{0.5F, 0.5F}));
+}
+
+TEST(FmcwDashboardTest, FittedSectorHandlesOffCenterAndWrappedAzimuths) {
+  const std::array<float, 2> bounds{2.8F, 3.4F};
+  constexpr float kTwoPi = 6.28318530717958647692F;
+  const auto right = viz::detail::sector_plot_position(1.0F, bounds[1] - kTwoPi, bounds);
+  ASSERT_TRUE(right);
+  EXPECT_NEAR((*right)[0], 1.0F, 1.0e-6F);
+  const auto center = viz::detail::sector_plot_position(0.5F, 3.1F, bounds);
+  ASSERT_TRUE(center);
+  EXPECT_NEAR((*center)[0], 0.5F, 1.0e-6F);
+  EXPECT_NEAR((*center)[1], 0.5F, 1.0e-6F);
+}
+
+TEST(FmcwDashboardTest, FittedSectorContainsAllRangesForNarrowAndWideScans) {
+  constexpr float kHalfPi = 1.57079632679489661923F;
+  for (const auto& bounds :
+       {std::array<float, 2>{-1.0e-7F, 1.0e-7F}, std::array<float, 2>{-kHalfPi, kHalfPi},
+        std::array<float, 2>{-2.0F, 0.0F}}) {
+    for (int step = 0; step <= 100; ++step) {
+      const float azimuth = bounds[0] + (bounds[1] - bounds[0]) * step / 100.0F;
+      for (float range : {0.0F, 0.25F, 0.5F, 1.0F}) {
+        const auto position = viz::detail::sector_plot_position(range, azimuth, bounds);
+        ASSERT_TRUE(position);
+        for (float coordinate : *position) {
+          EXPECT_GE(coordinate, 0.0F);
+          EXPECT_LE(coordinate, 1.0F);
+        }
+      }
+    }
+  }
+}
+
+TEST(FmcwDashboardTest, FittedSectorRejectsOutOfViewAndInvalidSamples) {
+  const std::array<float, 2> bounds{-0.3F, 0.3F};
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.4F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, -0.4F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(-0.1F, 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(1.1F, 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(std::nanf(""), 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, std::nanf(""), bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {0.0F, 0.0F}));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {0.3F, -0.3F}));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {-3.14F, 3.14F}));
+}
+
+TEST(FmcwDashboardTest, ComputesClusterCentroids) {
+  const std::vector<viz::DetectionMarker> markers =
+      viz::detail::make_cluster_markers({0, 2, 2, 4, 3, 6},
+                                        {10.0F, 1.0F, 0.1F, 0.2F, 1000.0F, 14.0F, 3.0F, 0.3F, 0.4F,
+                                         -1000.0F, 30.0F, -2.0F, -0.2F, -0.3F, 7.0F},
+                                        {0, 0, 1}, {2, 1}, 2, 5);
+  ASSERT_EQ(markers.size(), 2U);
+  EXPECT_FLOAT_EQ(markers[0].doppler_bin, 1.0F);
+  EXPECT_FLOAT_EQ(markers[0].range_bin, 3.0F);
+  EXPECT_FLOAT_EQ(markers[0].features[0], 12.0F);
+  EXPECT_NEAR(markers[0].features[3], 0.3015F, 0.002F);
+  EXPECT_EQ(markers[0].color_bucket, 0);
+  EXPECT_EQ(markers[1].color_bucket, 1);
+}
+
+TEST(FmcwDashboardTest, ClusterCentroidHandlesAzimuthWrap) {
+  const auto markers = viz::detail::make_cluster_markers(
+      {0, 1, 0, 1}, {10.0F, 1.0F, 3.13F, 0.1F, 10.0F, 1.0F, -3.13F, 0.1F}, {0, 0}, {2}, 2, 4);
+  ASSERT_EQ(markers.size(), 1U);
+  EXPECT_GT(std::abs(markers[0].features[2]), 3.0F);
+  EXPECT_NEAR(markers[0].features[3], 0.1F, 1e-5F);
+}
+
+TEST(FmcwDashboardTest, MakesRawDetectionMarkers) {
+  const std::vector<viz::DetectionMarker> markers = viz::detail::make_raw_detection_markers(
+      {0, 1, 2, 3, 1, 0, 4, 5},
+      {14.0F, 3.0F, 0.3F, 0.4F, -1000.0F, 10.0F, 1.0F, 0.1F, 0.2F, 1000.0F}, 4, 5);
+  ASSERT_EQ(markers.size(), 2U);
+  EXPECT_FLOAT_EQ(markers[0].doppler_bin, 2.0F);
+  EXPECT_FLOAT_EQ(markers[0].range_bin, 3.0F);
+  EXPECT_EQ(markers[0].features, (std::array<float, 4>{14.0F, 3.0F, 0.3F, 0.4F}));
+  EXPECT_EQ(markers[0].color_bucket, 1);
+  EXPECT_EQ(markers[1].color_bucket, 0);
+}
+
+TEST(FmcwDashboardTest, ConvertsDirectionCosineMarkersBeforeHistory) {
+  holoscan::radar::AngleConvention convention;
+  convention.preset = holoscan::radar::AngleConventionPreset::kDirectionCosine;
+  const auto markers =
+      viz::detail::make_raw_detection_markers({2, 3}, {14.0F, 3.0F, 0.5F, 0.25F}, 2, 4, convention);
+  ASSERT_EQ(markers.size(), 1U);
+  EXPECT_NEAR(markers[0].features[2], std::atan2(0.5, std::sqrt(0.6875)), 1e-6);
+  EXPECT_NEAR(markers[0].features[3], std::asin(0.25), 1e-6);
+}
+
+TEST(FmcwDashboardTest, AcceptsEmptyRawDetections) {
+  EXPECT_TRUE(viz::detail::make_raw_detection_markers({}, {}, 4, 5).empty());
+}
+
+TEST(FmcwDashboardTest, AcceptsTwoColumnAngleFreePoints) {
+  const auto raw = viz::detail::make_raw_detection_markers(
+      {2, 3}, {14.0F, 3.0F}, 2, 2, holoscan::radar::AngleConvention{}, false);
+  ASSERT_EQ(raw.size(), 1U);
+  EXPECT_EQ(raw[0].features, (std::array<float, 4>{14.0F, 3.0F, 0.0F, 0.0F}));
+
+  const auto clustered =
+      viz::detail::make_cluster_markers({2, 3, 4, 5}, {14.0F, 3.0F, 16.0F, 5.0F}, {0, 0}, {2}, 2, 2,
+                                        holoscan::radar::AngleConvention{}, false);
+  ASSERT_EQ(clustered.size(), 1U);
+  EXPECT_EQ(clustered[0].features, (std::array<float, 4>{15.0F, 4.0F, 0.0F, 0.0F}));
+}
+
+TEST(FmcwDashboardTest, RejectsMismatchedRawDetectionRows) {
+  EXPECT_THROW(viz::detail::make_raw_detection_markers(
+                   {0, 1, 2, 3}, {10.0F, 1.0F, 0.1F, 0.2F, 11.0F, 2.0F, 0.2F, 0.3F}, 4, 4),
+               std::invalid_argument);
+}
+
+TEST(FmcwDashboardTest, UsesReducedFeaturesForHistory) {
+  std::vector<viz::DetectionMarker> markers(2);
+  viz::detail::apply_reduced_features(
+      &markers, {10.0F, 1.0F, 0.1F, 0.2F, 3.0F, 20.0F, 2.0F, 0.3F, 0.4F, 4.0F}, 5);
+  EXPECT_EQ(markers[0].features, (std::array<float, 4>{10.0F, 1.0F, 0.1F, 0.2F}));
+  EXPECT_EQ(markers[1].features, (std::array<float, 4>{20.0F, 2.0F, 0.3F, 0.4F}));
+}
+
+TEST(FmcwDashboardTest, UsesTwoColumnReducedFeaturesWithoutAngles) {
+  std::vector<viz::DetectionMarker> markers(2);
+  viz::detail::apply_reduced_features(&markers, {10.0F, 1.0F, 20.0F, 2.0F}, 2,
+                                      holoscan::radar::AngleConvention{}, false);
+  EXPECT_EQ(markers[0].features, (std::array<float, 4>{10.0F, 1.0F, 0.0F, 0.0F}));
+  EXPECT_EQ(markers[1].features, (std::array<float, 4>{20.0F, 2.0F, 0.0F, 0.0F}));
+}
+
+TEST(FmcwDashboardTest, BoundsHistoryAndMapsPanelCoordinates) {
+  std::deque<viz::HistorySample> history;
+  const viz::DetectionMarker marker{.doppler_bin = 7.0F,
+                                    .range_bin = 11.0F,
+                                    .features = {10.0F, 0.0F, 0.25F, -0.25F},
+                                    .color_bucket = 3};
+  for (std::int64_t frame = 0; frame < 5; ++frame) {
+    viz::detail::append_history(&history, {marker}, frame, 3);
+  }
+  ASSERT_EQ(history.size(), 3U);
+  EXPECT_EQ(history.front().frame, 2);
+  EXPECT_FLOAT_EQ(history.front().doppler_bin, 7.0F);
+  EXPECT_FLOAT_EQ(history.front().range_bin, 11.0F);
+  const auto position = viz::detail::history_plot_position(history.back(), 4, 3, 2, {-0.5F, 0.5F});
+  EXPECT_FLOAT_EQ(position[0], 1.0F);
+  EXPECT_FLOAT_EQ(position[1], 0.75F);
+}
+
+TEST(FmcwDashboardTest, ExpiresDetectionAfterConfiguredFrames) {
+  std::deque<viz::HistorySample> history;
+  const viz::DetectionMarker marker{
+      .doppler_bin = 7.0F,
+      .range_bin = 11.0F,
+      .features = {10.0F, 0.0F, 0.25F, -0.25F},
+  };
+  viz::detail::append_history(&history, {marker}, 0, 3);
+  viz::detail::append_history(&history, {}, 1, 3);
+  viz::detail::append_history(&history, {}, 2, 3);
+  ASSERT_EQ(history.size(), 1U);
+  viz::detail::append_history(&history, {}, 3, 3);
+  EXPECT_TRUE(history.empty());
+}
+
+TEST(FmcwDashboardTest, DerivesMovingTargetTruthFeatures) {
+  const viz::TruthTarget target{
+      .position = {1.0, 0.0, 0.0},
+      .velocity = {0.0, 1.0, 1.0},
+  };
+  const auto features = viz::detail::truth_features_at_time(target, 1.0);
+  EXPECT_NEAR(features[0], std::sqrt(3.0F), 1.0e-6F);
+  EXPECT_NEAR(features[1], 2.0F / std::sqrt(3.0F), 1.0e-6F);
+  EXPECT_NEAR(features[2], std::acos(-1.0F) / 4.0F, 1.0e-6F);
+  EXPECT_NEAR(features[3], std::asin(1.0F / std::sqrt(3.0F)), 1.0e-6F);
+}
+
+TEST(FmcwDashboardTest, TruthVisibilityTracksTargetMotion) {
+  const viz::TruthTarget target{
+      .position = {1.0, 0.0, 0.0},
+      .velocity = {-2.0, 0.0, 0.0},
+  };
+  radar::sim::SceneVisibility visibility;
+  EXPECT_TRUE(viz::detail::truth_target_is_visible_at_time(target, 0.0, visibility));
+  EXPECT_FALSE(viz::detail::truth_target_is_visible_at_time(target, 1.0, visibility));
+
+  visibility.model = radar::sim::SceneVisibilityModel::kAll;
+  EXPECT_TRUE(viz::detail::truth_target_is_visible_at_time(target, 1.0, visibility));
+}
+
+}  // namespace
+
+TEST(CompletedFrameFit, AddsBordersWithoutChangingTheScientificCanvas) {
+  constexpr int width = 8, height = 4;
+  std::vector<std::uint8_t> input(width * height * 4, 127);
+  std::vector<std::uint8_t> output(input.size());
+  void* source = nullptr;
+  void* target = nullptr;
+  ASSERT_EQ(cudaMalloc(&source, input.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(source, input.data(), input.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  EXPECT_EQ(viz::fit_image(source, target, width, height, 400, 400, nullptr), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);
+  EXPECT_EQ(output[3], 255);
+  EXPECT_EQ(output[width * 4], 127);
+  EXPECT_EQ(output[(height - 1) * width * 4], 0);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(source), cudaSuccess);
+}
+
+namespace {
+class AgedCompletedFrameSourceOp final : public holoscan::Operator<> {
+ public:
+  explicit AgedCompletedFrameSourceOp(std::shared_ptr<radar::app::FrameProgress> progress,
+                                      std::chrono::seconds age = std::chrono::seconds{30})
+  : progress_(std::move(progress)), age_(age) {}
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.output(image)
+        .tensor_field(holoscan::schema::ImageTensorFields::data)
+        .produces_tensor(holoscan::TensorOutputSpec{
+            .representation = {.memory_kind = holoscan::MemoryKind::kCudaDevice,
+                               .dtype = DLDataType{kDLUInt, 8U, 1U},
+                               .rank = 3U,
+                               .strides = holoscan::TensorStridePolicy::kContiguousOnly},
+            .bounds = holoscan::TensorBounds{.max_rank = 3U, .max_byte_span = 16U},
+            .storage = holoscan::TensorOutputStorage::kRuntimePool});
+  }
+  holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = std::chrono::milliseconds{10}});
+    return result;
+  }
+  holoscan::expected<void, holoscan::Error> compute(holoscan::ExecutionContext& context) override {
+    if (sent_)
+      return {};
+    const std::array<int64_t, 3> shape{2, 2, 4};
+    HOLOSCAN_TRY(auto loan, image.allocate_tensor(holoscan::TensorLoanRequest{
+                                .shape = shape, .dtype = DLDataType{kDLUInt, 8U, 1U}}));
+    HOLOSCAN_TRY(auto writer, loan.write(context.cuda_stream()));
+    if (cudaMemsetAsync(writer.data(), 127, writer.byte_size(), context.cuda_stream().get()) !=
+        cudaSuccess)
+      return holoscan::make_unexpected(holoscan::Error{holoscan::ErrorCode::kFailure});
+    HOLOSCAN_RETURN_IF_ERROR(std::move(writer).commit());
+    holoscan::schema::ImageT descriptor{};
+    descriptor.width = 2;
+    descriptor.height = 2;
+    descriptor.encoding = holoscan::schema::ImageEncoding_RGBA8;
+    auto stamp = context.activation_time();
+    stamp.timestamp_ns -= std::chrono::duration_cast<std::chrono::nanoseconds>(age_).count();
+    progress_->expected_ns.store(stamp.timestamp_ns);
+    HOLOSCAN_RETURN_IF_ERROR(image.emit_tensor(std::move(loan), descriptor,
+                                               holoscan::EmitOptions{.capture_time = stamp}));
+    sent_ = true;
+    return {};
+  }
+  holoscan::Output<holoscan::schema::ImageT> image{"image"};
+
+ private:
+  std::shared_ptr<radar::app::FrameProgress> progress_;
+  bool sent_{false};
+  std::chrono::seconds age_;
+};
+}  // namespace
+
+TEST(CompletedFrameReplay, AcceptsOldAcquisitionTimesAndRetainsTheOriginalStamp) {
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  holoscan::Graph graph{"aged-completed-frame"};
+  auto source = graph.op<AgedCompletedFrameSourceOp>("source", progress);
+  auto replay = graph.op<viz::CompletedFrameReplayOp>("replay", 2, 2, 0.1,
+                                                      std::shared_ptr<radar::app::FrameProgress>{});
+  auto sink = graph.op<viz::CompletedFrameSinkOp>("sink", progress);
+  graph.partition("source").add(source);
+  graph.partition("replay").add(replay);
+  graph.partition("sink").add(sink);
+  graph.add_flow(source->image, replay->image);
+  graph.add_flow(replay->output, sink->image);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>(
+      "clock", holoscan::RealtimeClock::Config{.initial_time_offset = 60.0}));
+  holoscan::CompileOptions options;
+  const auto device = radar::app::application_device();
+  for (const auto* name : {"source", "replay"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = std::string(name) == "source" ? "image" : "output",
+        .device = device});
+  const auto plan = holoscan::compile(graph, options);
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  auto session = holoscan::run_async(plan);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+  while ((progress->expected_ns.load() < 0 ||
+          progress->capture_ns.load() != progress->expected_ns.load()) &&
+         std::chrono::steady_clock::now() < deadline &&
+         !session.wait_for(std::chrono::milliseconds{10})) {
+  }
+  session.request_stop();
+  session.wait();
+  EXPECT_TRUE(session.diagnostics().empty());
+  ASSERT_GE(progress->expected_ns.load(), 0);
+  EXPECT_EQ(progress->capture_ns.load(), progress->expected_ns.load());
+}
+
+TEST(CompletedFrameDock, KeepsFooterHeightAndImageFitIndependentOnResize) {
+  constexpr int width = 8, ih = 4, fh = 2;
+  std::vector<std::uint8_t> image(width * ih * 4, 127), footer(width * fh * 4, 200);
+  std::vector<std::uint8_t> output(width * (ih + fh) * 4);
+  void *main = nullptr, *strip = nullptr, *target = nullptr;
+  ASSERT_EQ(cudaMalloc(&main, image.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&strip, footer.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(main, image.data(), image.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(strip, footer.data(), footer.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  // A doubled window height leaves the footer two physical pixels high: one
+  // row in the bounded six-row presentation canvas. The SAR region can fit.
+  ASSERT_EQ(viz::compose_docked_panels(main, strip, target, width, ih, fh, 8, 12, true, nullptr),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);  // letterbox above the cached SAR canvas
+  EXPECT_EQ(output[width * 2 * 4], 127);
+  EXPECT_EQ(output[width * 4 * 4], 0);
+  EXPECT_EQ(output[width * 5 * 4], 200);  // independently positioned footer
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, strip, target, width, ih, fh, 8, 3, false, nullptr),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);  // timeline is valid before the first SAR image
+  EXPECT_EQ(output[width * 5 * 4], 200);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(strip), cudaSuccess);
+  EXPECT_EQ(cudaFree(main), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, KeepsStatusWithItsImageAndReservesTimelineSpaceOnResize) {
+  constexpr int width = 8, ih = 4, fh = 2, sw = 2;
+  std::vector<std::uint8_t> image(width * (ih + fh) * 4, 127);
+  std::fill(image.begin() + width * ih * 4, image.end(), 99);
+  std::vector<std::uint8_t> footer((width - sw) * fh * 4, 200);
+  std::vector<std::uint8_t> output(image.size());
+  void *main = nullptr, *strip = nullptr, *target = nullptr;
+  ASSERT_EQ(cudaMalloc(&main, image.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&strip, footer.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(main, image.data(), image.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(strip, footer.data(), footer.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  for (const int scale : {1, 2}) {
+    ASSERT_EQ(viz::compose_docked_panels(main, strip, target, width, ih, fh, width * scale,
+                                         (ih + fh) * scale, false, nullptr, sw),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(output[0], 127);
+    for (int x = 0; x < width; ++x)
+      EXPECT_EQ(output[4 * ((ih + fh - 1) * width + x)], x * scale < sw ? 99 : 200);
+  }
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, strip, target, width, ih, fh, width, ih + fh, false,
+                                       nullptr, sw),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[4 * ih * width], 0);           // no status before its image
+  EXPECT_EQ(output[4 * (ih * width + sw)], 200);  // timeline already updates
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(strip), cudaSuccess);
+  EXPECT_EQ(cudaFree(main), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, SamplesResizedFooterInPhysicalPixelsInsteadOfStretching) {
+  constexpr int width = 8, image_height = 4, footer_height = 2, footer_width = 16;
+  constexpr DLDataType rgba{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> footer(footer_width * footer_height * 4, 255);
+  for (int y = 0; y < footer_height; ++y)
+    for (int x = 0; x < footer_width; ++x)
+      footer[4 * (y * footer_width + x)] = static_cast<std::uint8_t>(10 + x);
+  auto source = radar::testing::to_device_tensor(footer, {footer_height, footer_width, 4}, rgba);
+  std::vector<std::uint8_t> output(width * (image_height + footer_height) * 4);
+  void* target = nullptr;
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, source->data(), target, width, image_height,
+                                       footer_height, 16, 6, false, nullptr, 2, footer_width),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  for (int x = 1; x < width; ++x)
+    EXPECT_EQ(output[4 * (image_height * width + x)], 10 + 2 * x - 1);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, RetainsOldContentStampsWithoutWaitingForMatchingTimelineTimes) {
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  holoscan::Graph graph{"aged-docked-frame"};
+  auto source = graph.op<AgedCompletedFrameSourceOp>("source", progress);
+  auto dock = graph.op<viz::DockedFrameOp>("dock", 2, 2, 2, 20.0, true, std::string{},
+                                           std::shared_ptr<radar::app::FrameProgress>{});
+  auto footer = graph.op<AgedCompletedFrameSourceOp>(
+      "footer", std::make_shared<radar::app::FrameProgress>(), std::chrono::seconds{40});
+  auto sink = graph.op<viz::CompletedFrameSinkOp>("sink", progress);
+  graph.partition("source").add(source);
+  graph.partition("footer").add(footer);
+  graph.partition("dock").add(dock);
+  graph.partition("sink").add(sink);
+  graph.add_flow(source->image, dock->image);
+  graph.add_flow(footer->image, dock->footer);
+  // Independent panel acquisition times must never form an exact timestamp join.
+  graph.add_flow(dock->output, sink->image);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>(
+      "clock", holoscan::RealtimeClock::Config{.initial_time_offset = 60.0}));
+  holoscan::CompileOptions options;
+  for (const auto* name : {"source", "footer", "dock"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = std::string(name) == "dock" ? "output" : "image",
+        .device = radar::app::application_device()});
+  const auto plan = holoscan::compile(graph, options);
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  auto session = holoscan::run_async(plan);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+  while ((progress->expected_ns.load() < 0 ||
+          progress->capture_ns.load() != progress->expected_ns.load()) &&
+         std::chrono::steady_clock::now() < deadline &&
+         !session.wait_for(std::chrono::milliseconds{10})) {
+  }
+  session.request_stop();
+  session.wait();
+  EXPECT_TRUE(session.diagnostics().empty());
+  ASSERT_GE(progress->expected_ns.load(), 0);
+  EXPECT_EQ(progress->capture_ns.load(), progress->expected_ns.load());
+}
+
+TEST(CompletedFrameDock, CompilesTheActualNativePresentationBranchWithoutOpeningAWindow) {
+  holoscan::Graph graph{"native-docked-wiring"};
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  auto image = graph.op<AgedCompletedFrameSourceOp>("image", progress);
+  auto footer = graph.op<AgedCompletedFrameSourceOp>("footer", progress);
+  auto image_partition = graph.partition("image");
+  auto footer_partition = graph.partition("footer");
+  image_partition.add(image);
+  footer_partition.add(footer);
+  radar::app::VisualizationConfig config;
+  config.x11_presentation = false;
+  config.window_title = "native dock compile check";
+  holoscan::CompileOptions options;
+  for (const auto* name : {"image", "footer"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = "image",
+        .device = holoscan::DeviceId{radar::app::application_composer_device()}});
+  viz::add_docked_presentation(graph, options, image_partition, image->image, footer_partition,
+                               footer->image, 2, 2, 2, config, progress);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  // Compilation exercises the real helper's partitions, device placement and
+  // native viewer ports. Window/Vulkan surface creation belongs to start().
+  const auto plan = holoscan::compile(graph, options);
+  EXPECT_TRUE(plan.ok()) << plan.json();
+}

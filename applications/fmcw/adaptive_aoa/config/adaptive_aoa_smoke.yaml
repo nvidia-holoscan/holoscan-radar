@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+extends: adaptive_aoa.yaml
+app:
+    waveform:
+        chirp_duration: 1.0e-05
+        sample_rate: 6.4e6
+    cube:
+        num_chirps: 16
+        samples_per_chirp: 64
+    run:
+        num_frames: 2
+        frame_period: 0.02
+        meter_cadence: false
+    visualization:
+        enabled: false
+        window_width: 640
+        window_height: 360
+        window_title: FMCW Adaptive AoA Smoke
+        history_frames: 2
+        detection_trail_frames: 2
+    targets:
+        - range: 22.0
+          azimuth: -0.1
+          elevation: 0.0
+          velocity: [-1.90017, 1.195, 0.0]
+          amplitude: 1.0
+        - range: 22.0
+          azimuth: 0.1
+          elevation: 0.0
+          velocity: [-2.09983, 0.795, 0.0]
+          amplitude: 1.0
+        - range: 28.0
+          azimuth: 0.25
+          elevation: 0.0
+          velocity: [0.7526, 1.21891, 0.0]
+          amplitude: 0.8
+    range_loss: null
+range_processor:
+    waveform:
+        chirp_duration: 1.0e-05
+        sample_rate: 6.4e6
+doppler_processor:
+    waveform:
+        chirp_duration: 1.0e-05
+        sample_rate: 6.4e6
+cfar_detector:
+    guard_cells: [1, 1]
+    training_cells: [2, 2]
+    pfa: 1.0e-05
+beamscan_estimator:
+    az_coordinates:
+        step: 0.05
+    el_coordinates:
+        min: -0.2
+        max: 0.2
+        step: 0.05
+music_estimator:
+    az_coordinates:
+        min: -0.4
+        max: 0.4
+        step: 0.02
+    el_coordinates:
+        min: -0.2
+        max: 0.2
+        step: 0.02
+mvdr_estimator:
+    az_coordinates:
+        min: -0.4
+        max: 0.4
+        step: 0.02
+    el_coordinates:
+        min: -0.2
+        max: 0.2
+        step: 0.02

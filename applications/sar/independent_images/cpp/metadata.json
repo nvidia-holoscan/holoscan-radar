@@ -1,0 +1,56 @@
+{
+    "$schema": "urn:holohub:application:v1",
+    "application": {
+        "name": "independent_images",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": [
+            "C++"
+        ],
+        "version": "1.0.0",
+        "changelog": {
+            "0.1.0": "Standalone SAR independent_images application"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "5.0.0",
+            "tested_versions": [
+                "5.0.0"
+            ]
+        },
+        "platforms": [
+            "x86_64",
+            "aarch64"
+        ],
+        "tags": [
+            "Radar",
+            "Signal Processing",
+            "GPU",
+            "Accelerated Computing",
+            "Synthetic Aperture Radar"
+        ],
+        "ranking": 3,
+        "requirements": {},
+        "default_mode": "default",
+        "modes": {
+            "default": {
+                "description": "Run the SAR independent images pipeline",
+                "run": {
+                    "command": "<holohub_app_bin>/independent_images",
+                    "workdir": "holohub_app_bin"
+                },
+                "build": {
+                    "cmake_options": [
+                        "-DBUILD_ALL=OFF",
+                        "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+                        "-DPKG_holoscan_radar=OFF",
+                        "-DHOLOSCAN_RADAR_APPLICATION=independent_images"
+                    ]
+                }
+            }
+        }
+    }
+}

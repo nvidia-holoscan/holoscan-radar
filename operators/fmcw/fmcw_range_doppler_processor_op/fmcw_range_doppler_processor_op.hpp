@@ -1,0 +1,179 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <type_traits>
+
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/parameter.hpp>
+#include <holoscan/core/parameter_schema.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+
+#include "radar_common/sdk/config_cache.hpp"
+#include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/math/constants.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
+
+namespace holoscan::radar {
+
+namespace detail {
+template <typename T>
+struct RangeStageState;  // defined in range_stage.hpp
+template <typename T>
+struct DopplerStageState;  // defined in doppler_stage.hpp
+}  // namespace detail
+
+// Fused range + optional clutter + Doppler processing in one graph node.
+// This header is the contract reference for the operator's ports, shapes,
+// dtypes, and parameters. Drop-in replacement for the split
+// FMCWRangeProcessorOp -> [ClutterFilterOp] -> FMCWDopplerProcessorOp chain
+// where the intermediate range profiles are not needed; produces identical
+// rd_maps (within tolerance) by calling the same stage functions. For
+// mean_subtraction, doppler_window supplies both the weighted clutter
+// projection and the Doppler analysis taper. Split chains must configure the
+// same window on ClutterFilterOp and FMCWDopplerProcessorOp.
+//
+// In:  adc_cube      — complex64/complex128 (IQ IF) or float32/float64
+//                      (real IF), (num_chirps, samples_per_chirp) or with
+//                      named leading N_rx / (M_tx, N_rx).
+// Out: rd_maps       — complex64/complex128,
+//                      same leading + (num_doppler, num_range_bins).
+// Out: range_bins    — optional, float32/float64, (num_range_bins,).
+// Out: velocity_bins — optional, float32/float64, (num_doppler,).
+//
+// Precision is fixed at compile time by the template instantiation
+// (T = float → complex64/float32, T = double → complex128/float64).
+// Fat outs require MaxTensorExtents at graph.op() (ctor).
+//
+struct FMCWRangeDopplerProcessorParams {
+  WindowSpec range_window{};
+  WindowSpec doppler_window{};
+  bool apply_dechirp{false};
+  ClutterFilterMethod clutter_filter{ClutterFilterMethod::kNone};
+  // Default-constructed = none/absent; is_valid() -> false.
+  FMCWWaveformDescriptor waveform{};
+  FftNorm fft_norm{FftNorm::kBackward};
+  bool center_zero_doppler{true};
+  double propagation_speed{kDefaultPropagationSpeed};
+  // 0 = exact (no zero-padding); >= samples_per_chirp when non-zero.
+  int64_t nfft_range{0};
+  // 0 = exact (no zero-padding); >= post-clutter chirp count when non-zero.
+  int64_t nfft_doppler{0};
+  std::uint64_t cache_budget_bytes{67108864ULL};
+};
+
+HOLOSCAN_PARAM_SCHEMA(
+    FMCWRangeDopplerProcessorParams,
+    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWRangeDopplerProcessorParams", 2),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::range_window>("range_window")
+        .description("WindowSpec applied along fast-time before the range FFT "
+                     "(coherent-gain normalized). Default: none (rectangular)."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::doppler_window>("doppler_window")
+        .description("WindowSpec applied along the chirp (slow-time) axis before "
+                     "the Doppler FFT (coherent-gain normalized), and also used for "
+                     "the clutter projection when clutter_filter is mean_subtraction. "
+                     "Default: none."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::apply_dechirp>("apply_dechirp")
+        .description("Software dechirp before the range FFT. Requires a waveform "
+                     "and complex-IF input when true."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::clutter_filter>("clutter_filter")
+        .description("Optional inline clutter stage between the range and Doppler "
+                     "stages {none, mean_subtraction, single_delay, double_delay}; "
+                     "same semantics as ClutterFilterOp's method. Mean subtraction "
+                     "uses doppler_window; the delay cancellers reduce num_doppler."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::waveform>("waveform")
+        .description("Dechirp reference and the range_bins / velocity_bins axes. "
+                     "Required for software dechirp and/or those outputs."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::fft_norm>("fft_norm")
+        .description("One normalization convention {backward, ortho, forward} for "
+                     "both transforms."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::center_zero_doppler>("center_zero_doppler")
+        .description("Center zero-Doppler on the Doppler axis; else DC at bin 0."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::propagation_speed>("propagation_speed")
+        .description("Wave speed (m/s) for the range_bins output."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::nfft_range>("nfft_range")
+        .description("Fast-time FFT length >= samples_per_chirp; larger zero-pads "
+                     "for a finer interpolated range grid. 0 = samples_per_chirp."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::nfft_doppler>("nfft_doppler")
+        .description("Slow-time FFT length >= the post-clutter chirp count for the "
+                     "Doppler stage. 0 = the post-clutter chirp count."));
+
+static_assert(holoscan::param_schema_availability<FMCWRangeDopplerProcessorParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in "
+              "FMCWRangeDopplerProcessorParams's namespace");
+
+template <typename T>
+class FMCWRangeDopplerProcessorOp : public holoscan::Operator<FMCWRangeDopplerProcessorParams> {
+  static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
+                "FMCWRangeDopplerProcessorOp supports float and double "
+                "precision");
+
+ public:
+  explicit FMCWRangeDopplerProcessorOp(const MaxTensorExtents& extents);
+  ~FMCWRangeDopplerProcessorOp() override;
+
+  void setup(OperatorSpec& spec) override;
+  [[nodiscard]] Contract contract() const override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
+
+  Input<Tensor> adc_cube{"adc_cube"};
+  Output<Tensor> rd_maps{"rd_maps"};
+  Output<Tensor> range_bins{"range_bins"};
+  Output<Tensor> velocity_bins{"velocity_bins"};
+
+  // [live] Exact override ports (the operator README).
+  Input<wire::WindowSpecT> range_window_in{"range_window"};
+  Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
+  Input<bool> apply_dechirp_in{"apply_dechirp"};
+  Input<ClutterFilterMethod> clutter_filter_in{"clutter_filter"};
+  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
+  Input<FftNorm> fft_norm_in{"fft_norm"};
+  Input<bool> center_zero_doppler_in{"center_zero_doppler"};
+  Input<int64_t> nfft_range_in{"nfft_range"};
+  Input<int64_t> nfft_doppler_in{"nfft_doppler"};
+
+ private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
+  Tensor retained_input_;
+
+  // Both axis outputs are optional/latched (the operator README).
+  LatchedOutput range_bins_out_;
+  LatchedOutput velocity_bins_out_;
+
+  // Kernel-side caches for the two FFT stages.
+  std::shared_ptr<detail::RangeStageState<T>> range_state_;
+  std::shared_ptr<detail::DopplerStageState<T>> doppler_state_;
+
+  MaxTensorExtents extents_;
+  std::uint32_t max_rank_{2U};
+  std::size_t max_byte_span_{0U};
+  std::size_t range_bins_byte_span_{0U};
+  std::size_t velocity_bins_byte_span_{0U};
+};
+
+// Explicit instantiations live in fmcw_range_doppler_processor_op.cu.
+extern template class FMCWRangeDopplerProcessorOp<float>;
+extern template class FMCWRangeDopplerProcessorOp<double>;
+
+}  // namespace holoscan::radar

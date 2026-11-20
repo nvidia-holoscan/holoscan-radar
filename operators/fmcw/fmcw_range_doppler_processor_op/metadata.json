@@ -1,0 +1,26 @@
+{
+    "$schema": "urn:holohub:operator:v1",
+    "operator": {
+        "name": "FMCWRangeDopplerProcessorOp",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "1.0.0",
+        "changelog": {
+            "0.2.0": "Use doppler_window for mean-subtraction projection and analysis",
+            "0.1.0": "Initial Release"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "4.3.0",
+            "tested_versions": ["4.3.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "Range-Doppler", "FFT"],
+        "ranking": 3,
+        "requirements": {}
+    }
+}

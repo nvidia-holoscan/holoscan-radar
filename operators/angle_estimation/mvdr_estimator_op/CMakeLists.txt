@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+add_library(mvdr_estimator_op
+    mvdr_estimator_op.cu)
+add_library(holoscan::mvdr_estimator_op ALIAS mvdr_estimator_op)
+
+target_include_directories(mvdr_estimator_op PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators>
+    $<INSTALL_INTERFACE:include>)
+
+target_link_libraries(mvdr_estimator_op
+    PUBLIC
+        holoscan::core
+        holoscan::radar_common
+        holoscan::radar_common_steering
+        holoscan::radar_common_spatial_smoothing
+        holoscan::radar_schemas
+    PRIVATE
+        matx::matx)
+
+holoscan_radar_set_library_properties(mvdr_estimator_op)
+
+install(TARGETS mvdr_estimator_op
+    EXPORT holoscan_radar_targets
+)
+
+include(GNUInstallDirs)
+install(FILES mvdr_estimator_op.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/angle_estimation
+)

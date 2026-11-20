@@ -1,0 +1,11 @@
+# Copyright check exclude globs
+# One glob fragment per line, comments start with #. `build` excludes generated
+# build trees at any depth.
+#
+# Usage:
+#   In CI: python3 .github/workflows/scripts/check_copyright.py --exclude-config .github/workflows/scripts/copyright_excludes.txt .
+#   Locally: python3 .github/workflows/scripts/check_copyright.py --exclude-config .github/workflows/scripts/copyright_excludes.txt --git-modified-only .
+#
+# You can also combine with additional excludes:
+#   python3 .github/workflows/scripts/check_copyright.py --exclude-config .github/workflows/scripts/copyright_excludes.txt --exclude "my_temp_file.py" .
+build

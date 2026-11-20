@@ -1,0 +1,85 @@
+# Dense beamforming
+
+See [shared preset inheritance and launch modes](../README.md).
+
+Beamform-then-detect FMCW example. This implementation happens to use a SIMO
+array, but the application is named for the processing approach it demonstrates. It forms the full range-Doppler-angle cube, applies N-D CFAR peak suppression, resolves physical coordinates, and reports the retained detections directly.
+
+```mermaid
+flowchart LR
+    Source[Sim ADC source] --> Range[Range processor] --> Clutter[Clutter filter] --> Doppler[Doppler processor]
+    Doppler --> Beamform[Phase-shift beamformer] --> CFAR[CFAR detector] --> Features[Feature assembly] --> Report[Detection report]
+    Range --> Features
+    Doppler --> Features
+    Beamform --> Features
+    CFAR --> Dashboard[FmcwDashboardOp]
+    Features --> Dashboard
+    Range --> Dashboard
+    Doppler --> Dashboard
+    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FrameComposerOp] -->|Native| Replay[CompletedFrameReplayOp] --> Holoviz[NativeImagePresenterOp]
+    Image -.->|Different GPUs| InputDownload[ImageDownloadOp]
+    InputDownload -.-> InputUpload[ImageUploadOp] -.-> Frame
+    Replay -.->|Different GPUs| Download[ImageDownloadOp]
+    Download -.-> Upload[ImageUploadOp] -.-> Holoviz
+    Frame -->|X11| X11Download[ImageDownloadOp] --> X11Window[X11ImagePresenterOp]
+    Dashboard -->|Native text| Frame
+    Frame -->|Headless| Sink[CompletedFrameSinkOp]
+```
+
+The [shared dashboard](../../common/radar_app/viz/README.md) uses native SDK text,
+a relative-power legend, and frame-driven presentation capped by
+`visualization.display_rate_hz`.
+
+## Configuration
+
+Operator settings are top-level YAML blocks: `range_processor`, `clutter_filter`,
+`doppler_processor`, `phase_shift_beamformer`, `cfar_detector`, and
+`feature_assembly`. Scenario and visualization settings remain under `app`.
+For existing presets, remove the former `beamform_then_detect:` wrapper and
+unindent its three operator blocks by one level. Both languages use this layout.
+
+## Run the C++ app from the host
+
+From the repository root, the CLI builds the app and runs it in a container:
+
+```bash
+./holoscan-radar run dense_beamforming smoke --language cpp
+```
+
+This runs the two-frame headless smoke preset. Run
+`./holoscan-radar run dense_beamforming --language cpp` on a host with a
+display for the normal preset. The CLI selects Python if `--language` is omitted.
+
+The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset explicitly disables it, uses the constant-amplitude analytic model, and emits a warning.
+
+Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.
+
+The C++ and Python GUI smoke tests use
+[`dense_beamforming_viz_smoke.yaml`](config/dense_beamforming_viz_smoke.yaml).
+It keeps the same processing graph and scene, with 16 chirps and a 5-by-5 angle
+grid to reduce worst-case Tensor pool reservations on CI GPUs. The normal demo
+uses 128 chirps and a 13-by-13 angle grid.
+
+## Python Graph
+
+The HSDK 5 Python provider uses the same C++ YAML loader, operator ports,
+device bindings, report sink, and optional dashboard as this C++ application.
+From the repository root, the host CLI builds and runs the colocated
+`python/` graph with the pinned development image:
+
+```bash
+./holoscan-radar run dense_beamforming smoke --language python
+```
+
+After building or installing the Python wheel, call the graph directly:
+
+```python
+from holoscan.radar.applications.dense_beamforming import build_graph
+
+workflow = build_graph("applications/fmcw/dense_beamforming/config/dense_beamforming_smoke.yaml")
+workflow.run()
+```
+
+`build_graph()` returns a `BuiltGraph`; call `.run()` to stop the Graph after
+the configured report frame count. The canonical import path is
+`holoscan_radar.applications.dense_beamforming`.

@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Continuous strip demo: continuous strip of Imperial Valley Capella
+# stripmap (applications/sar/tools/README.md). Same collect as tiled strip; continuous strip
+# translates the lattice along v and scrolls the accumulator
+# (no tile seams, no cross-range taper). Pull first (~3.45 GiB);
+# the app never reaches the network.
+#
+#   uv run applications/sar/tools/pull_cphd.py --app continuous_strip \
+#     --dest data/sar
+#   Paths below resolve under the build data directory (default: data/).
+#
+# Lattice follows the SRP chord (not the IARP tangent plane).
+# lattice.max_side is the scrolling window depth along v, not a
+# coarsening cap; parent u is the IFFT swath.
+# pixel_scale divides the native 2.58 m ground-range GSD (0.75 m
+# slant at 200 MHz, projected through 73.11 deg graze). At 1 the
+# parent is 40247 x 6029 and the accumulator 3.62 GiB. It is one
+# square spacing on both axes: the derivation has no per-axis
+# form, and lattice.spacing is rejected under scroll. Raising it
+# costs its square in window pixels and accumulator bytes -- 2.5
+# gives a 100618 x 15073 parent at 1.03 m, a 22.6 GiB
+# accumulator, and BP at ~17 ms a window against ~7 ms here.
+# Geometry goes to BackprojectionOp (geometry_change: scroll);
+# the manager is cadence only (emit_and_continue, no weight).
+# pulses_per_tick 1024 (reader batch). emit_interval 256:
+# the graph driver gives the stager that slice size, so one
+# reader cube becomes four manager/BP ticks (window from each
+# slice's last SRP). 159050 / 1024 leaves a 330-pulse final
+# reader batch (256+74 after slicing). playback_rate 1 paces to collect time.
+# nfft_pad: next_fast. loop continues until the process is stopped; wrap restages
+# the opening window with emit-and-reset. Holoviz is the parent
+# strip (same landscape fit as tiled strip), not the scrolling chip:
+# SarMosaicOp blits each window into the parent. The parent is
+# resident and full resolution, but it is never published: a
+# Tensor pool holds 16 slots of whatever rides the port, and a
+# copy of the parent is 3.62 GiB here and 22.6 GiB at 2.5.
+# image_out carries the u-cropped parent decimated to twice
+# visualize_size, ~16 MiB, which is also what dump writes. That
+# decimation is a 16-look incoherent average, not a subsample:
+# speckle subsampled 15x renders as static.
+# Full-resolution strip output would have to come off the
+# accumulator directly and is not implemented.
+# Holoviz transposes only the display axes: along-track v is
+# horizontal, so the long strip fits a landscape window.
+# visualize_size caps that long display axis in pixels.
+
+cphd:
+  path: sar/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  names:
+    - Imperial Valley
+  sidecar: ""
+
+lattice:
+  scroll: true
+  max_side: 4096
+  pixel_scale: 1
+
+cphd_reader:
+  coordinate_frame: ecef
+  pulse_range: [0, 159050]
+  pulses_per_tick: 1024
+  loop: true
+  playback_rate: 1
+  duty_cycle: 1
+  wait_for_downstream: true
+
+nfft_pad: next_fast
+
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 256
+  emit_mode: continue
+
+range_compression:
+  range_window: taylor
+
+backprojection:
+  coordinate_frame: ecef
+  geometry_change: scroll
+
+app:
+  visualization:
+    enabled: true
+    max_side: 1400
+    skip_display_check: false
+    headless: false
+    final_image_hold_s: -1

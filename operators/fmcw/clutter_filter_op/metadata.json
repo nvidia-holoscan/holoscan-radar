@@ -1,0 +1,28 @@
+{
+    "$schema": "urn:holohub:operator:v1",
+    "operator": {
+        "name": "ClutterFilterOp",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "1.0.0",
+        "changelog": {
+            "0.4.0": "Add doppler_window API for window-weighted mean subtraction",
+            "0.3.0": "Allow standalone method none as a materialized pass-through",
+            "0.2.0": "HSDK 5 migration: Operator<Params>, typed Tensor ports, range_profiles_out rename",
+            "0.1.0": "Initial Release"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "5.0.0",
+            "tested_versions": ["5.0.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "Clutter Suppression", "MTI"],
+        "ranking": 3,
+        "requirements": {}
+    }
+}

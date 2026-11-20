@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Angle-estimation operators (see README.md in this directory).
+holoscan_radar_add_operator(snapshot_gather_op)
+holoscan_radar_add_operator(subarray_selection_op)
+holoscan_radar_add_operator(beamscan_estimator_op)
+holoscan_radar_add_operator(rank_one_residual_screen_op)
+holoscan_radar_add_operator(mvdr_estimator_op)
+holoscan_radar_add_operator(music_estimator_op)
+holoscan_radar_add_operator(root_music_estimator_op)
+holoscan_radar_add_operator(esprit_estimator_op)
+holoscan_radar_add_operator(phase_shift_beamformer_op)
+
+# ESPRIT and Root-MUSIC public headers include this shared device helper.
+include(GNUInstallDirs)
+install(FILES angle_boundary_device.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/angle_estimation
+)

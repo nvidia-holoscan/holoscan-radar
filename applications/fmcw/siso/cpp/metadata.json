@@ -1,0 +1,71 @@
+{
+  "$schema": "urn:holohub:application:v1",
+  "application": {
+    "name": "siso",
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "language": [
+      "C++"
+    ],
+    "version": "1.0.0",
+    "changelog": {
+      "0.1.0": "Baseline FMCW SISO range-Doppler detection and clustering"
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Radar",
+      "Signal Processing",
+      "GPU",
+      "FMCW",
+      "SISO"
+    ],
+    "ranking": 3,
+    "requirements": {},
+    "default_mode": "default",
+    "modes": {
+      "default": {
+        "description": "Baseline FMCW SISO range-Doppler processing",
+        "run": {
+          "command": "<holohub_app_bin>/siso",
+          "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=siso"
+          ]
+        }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "<holohub_app_bin>/siso siso_smoke.yaml",
+          "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=siso"
+          ]
+        }
+      }
+    }
+  }
+}

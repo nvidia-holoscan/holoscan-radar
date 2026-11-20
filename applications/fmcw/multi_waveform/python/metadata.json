@@ -1,0 +1,84 @@
+{
+  "$schema": "urn:holohub:application:v1",
+  "application": {
+    "name": "multi_waveform",
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "language": [
+      "Python"
+    ],
+    "version": "1.0.0",
+    "changelog": {
+      "0.1.0": "Add coherent near/far MIMO TDM profiles"
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Radar",
+      "Signal Processing",
+      "GPU",
+      "FMCW",
+      "MIMO",
+      "TDM"
+    ],
+    "ranking": 3,
+    "requirements": {},
+    "default_mode": "default",
+    "modes": {
+      "default": {
+        "description": "Coherent alternating near/far MIMO TDM processing",
+        "run": {
+          "command": "python3.12 -m holoscan_radar.applications.cli multi_waveform",
+          "workdir": "<holohub_app_source>/../config",
+          "env": {
+            "PYTHONPATH": "/usr/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",
+            "HOLOSCAN_LIB_PATH": "/usr/lib"
+          }
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=multi_waveform",
+            "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
+            "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
+          ]
+        }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "python3.12 -m holoscan_radar.applications.cli multi_waveform multi_waveform_smoke.yaml",
+          "workdir": "<holohub_app_source>/../config",
+          "env": {
+            "PYTHONPATH": "/usr/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",
+            "HOLOSCAN_LIB_PATH": "/usr/lib"
+          }
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=multi_waveform",
+            "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
+            "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
+          ]
+        }
+      }
+    }
+  }
+}

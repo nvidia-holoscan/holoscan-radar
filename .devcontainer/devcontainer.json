@@ -1,0 +1,65 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Dev container for holoscan-radar.
+//
+// Reuses the module's root Dockerfile and mirrors the holoscan-cli layout:
+//   * the repo is bind-mounted at /workspace/holoscan-radar,
+//   * the data dir lands at /workspace/holoscan-radar/data.
+{
+  "name": "holoscan-radar",
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile",
+    "args": {
+      "BASE_IMAGE": "nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13"
+    }
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace/holoscan-radar",
+  // Work as the non-root `dev` user (team convention). Let the devcontainer
+  // runtime update its UID/GID to match the host user for bind-mount writes.
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
+
+  // Host display → container (Holoviz / fmcw_siso visualize).
+  // initializeCommand runs on the *host* before the container starts and
+  // authorizes only this host user, whose UID the container matches. Keep
+  // cookie-based SSH/X11 forwarding separate; never fall back to all local users.
+  // Headless / no-xhost hosts: the || true keeps startup soft.
+  "initializeCommand": "bash -c 'command -v xhost >/dev/null && user=$(id -un) && xhost \"+SI:localuser:$user\" || true'",
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
+  "mounts": [
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind"
+  ],
+
+  // Requires NVIDIA Container Toolkit. Remove on GPU-less hosts.
+  "runArgs": [
+    "--gpus=all",
+    "--ulimit",
+    "stack=33554432"
+  ],
+  "hostRequirements": {
+    "gpu": "optional"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "cmake.sourceDirectory": "/workspace/holoscan-radar",
+        "cmake.buildDirectory": "/workspace/holoscan-radar/build",
+        "cmake.configureArgs": [
+          "-DHOLOSCAN_RADAR_BUILD_TESTING=ON"
+        ],
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  }
+}

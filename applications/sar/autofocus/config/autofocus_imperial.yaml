@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# the autofocus estimation/reformation path on Imperial Valley -- a scene-axis config for
+# operators/sar/autofocus_op/tools/sweep.py (see autofocus_atlanta.yaml for why
+# the scene axis exists).
+#
+# This is the deliberate negative control: Capella stripmap over
+# irrigated agriculture, which is distributed clutter with no
+# dominant scatterer anywhere in it. PGA's whole premise is that some
+# range bins contain a point target whose phase history *is* the
+# error; field returns are many comparable scatterers per resolution
+# cell, so centring a window on the brightest sample shifts a speckle
+# realisation to DC and the gradient it yields is noise.
+#
+# A failure here is therefore the expected answer, and the reason to
+# run it is to tell the two kinds of failure apart. If an error shape
+# fails on Imperial Valley but passes on Kourou, Atlanta and Houston,
+# that is the scene precondition and belongs in the contract's
+# preconditions, not in the bug list. If a shape fails on all four,
+# the estimator owns it. Without a negative control every per-scene
+# failure looks like a defect.
+#
+# Stripmap also costs the dwell something Kourou does not pay: the
+# footprint sweeps, so a scene point is lit for only part of the
+# 159051 vectors and the aperture below is a fraction of the collect.
+#
+# Download once (3.45 GiB); the app never reaches the network.
+# Paths resolve under the build data directory (default: data/).
+
+cphd:
+  path: sar/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  names:
+    - Imperial Valley
+  sidecar: ""
+
+# IARP-centred ECEF grid, derived from the CPHD (see
+# autofocus_atlanta.yaml). Capella SM is ~0.5 m slant.
+lattice:
+  counts: 2048
+  spacing: 0.5
+
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 1024
+  # Centre the window on the pass: in stripmap the IARP is abeam near
+  # the middle of the collect, and an aperture at either end would be
+  # imaging the scene through the edge of the beam.
+  pulse_range: [75525, 83525]
+
+aperture_manager:
+  max_aperture_pulses: 8000
+  emit_interval_pulses: 0
+  emit_mode: reform
+
+range_compression:
+  propagation_speed: 299792458.0
+
+backprojection:
+  coordinate_frame: ecef
+
+autofocus:
+  azimuth_axis: u
+  min_scatterers: 16
+  window_fraction: 0.125
+
+phase_correction:
+  sense: subtract
+
+aux_lattice:
+  mode: polar
+
+app:
+  visualization:
+    enabled: false

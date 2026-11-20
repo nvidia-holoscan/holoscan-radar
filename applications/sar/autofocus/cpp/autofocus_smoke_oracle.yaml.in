@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Figure 2 apply-path smoke: the same liar, but the exact leftover is
+# handed straight to PhaseCorrectionOp instead of being estimated. If
+# this reproduces the clean smoke product, the correction path is
+# sound and any shortfall in a full run belongs to AutofocusOp.
+
+cphd:
+  path: @SAR_FIXTURE@
+  sidecar: ""
+enu_origin_ecef: [6378000.0, 0.0, 0.0]
+sample_geometry:
+  origin: [-2.0, 2.0, 0.0]
+  axis_v: [0.0, -1.0, 0.0]
+  axis_u: [1.0, 0.0, 0.0]
+  spacing: [1.0, 1.0]
+  counts: [5, 5]
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 3
+
+# The whole aperture is retained and replayed once, which is what
+# makes a corrected second pass possible at all.
+aperture_manager:
+  max_aperture_pulses: 5
+  emit_interval_pulses: 0
+  emit_mode: reform
+
+range_compression:
+  propagation_speed: 299792458.0
+
+backprojection:
+  coordinate_frame: enu
+
+phase_correction:
+  sense: subtract
+
+# The same 2 cm quadratic the estimator fixture injects, so the two
+# runs are comparable.
+position_error:
+  axis: look
+  polynomial: [0, 0, 0.02]
+  oracle: true
+
+visualize: false

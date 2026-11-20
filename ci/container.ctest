@@ -1,0 +1,226 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# CTest driver selected by [tool.holoscan] in the root pyproject.toml.
+# The bundled CLI driver lives in site-packages; this relative path resolves
+# from the repository root, including inside the development container.
+#
+# Invoke via the Holoscan CLI: ./holoscan-radar test
+# Or directly: ctest -S ci/container.ctest -VV
+#
+# CTest -D variables (mirrors the stock driver so CLI flags keep working):
+#   APP / OP / PKG / EXT   Optional single-subproject selector; omit for a
+#                          repository-wide build (the primary path here)
+#   TAG                    Image tag / branch identifier (default: "latest")
+#   CTEST_SITE             CDash site name (default: "SITE_NA")
+#   CTEST_BUILD_NAME       Exact dashboard build name; when omitted, compose
+#                          one from BUILD_NAME_PREFIX / PLATFORM_NAME / TAG
+#   RADAR_CDASH_BUILD_NAME Jenkins/CDash build-name override, applied just
+#                          before ctest_start (reserved -D names can be reset)
+#   CTEST_BUILD_FLAGS      Optional flags for ctest_build, e.g. "-j24"
+#   CTEST_NIGHTLY_START_TIME  Nightly dashboard boundary (default: 06:00 UTC)
+#   PLATFORM_NAME          Platform portion of the build name (default: "linux")
+#   BUILD_NAME_PREFIX      Leading token in the CTest build name
+#   CONFIGURE_OPTIONS      Semicolon-separated list of extra cmake -D flags
+#                          (holoscan-cli passes --cmake-options through here;
+#                          -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF disables Python)
+#   CTEST_SUBMIT_URL       CDash submit URL; omit to skip submission
+#   EXCLUDE_LABELS         Optional label regex NOT to run
+#   INCLUDE_LABELS         Optional label regex to narrow to one tier, e.g.
+#                          -DINCLUDE_LABELS=statistical
+#   DASHBOARD_MODEL        Nightly | Experimental | Continuous
+#   TEST_FAILURES_FILE     If defined, write the test exit code here instead of
+#                          calling FATAL_ERROR
+
+set(PROJ_PREFIX APP)
+set(PROJ_NAME "")
+
+if(OP)
+    set(PROJ_NAME ${OP})
+    set(PROJ_PREFIX OP)
+elseif(PKG)
+    set(PROJ_NAME ${PKG})
+    set(PROJ_PREFIX PKG)
+elseif(EXT)
+    set(PROJ_NAME ${EXT})
+    set(PROJ_PREFIX EXT)
+elseif(APP)
+    set(PROJ_NAME ${APP})
+else()
+    message(STATUS "No APP/OP/PKG/EXT provided; running repository-wide tests")
+endif()
+
+if(NOT TAG)
+    set(TAG latest)
+endif()
+
+# The repo root is the parent of ci/ — unlike the stock driver, which lands in
+# site-packages.
+get_filename_component(CTEST_SOURCE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
+                       ABSOLUTE)
+
+# A dedicated tree: ctest_empty_binary_directory() wipes this on every run, so
+# it must never be a developer's own build/ directory.
+set(CTEST_BINARY_DIRECTORY "${CTEST_SOURCE_DIRECTORY}/build-test")
+
+if(NOT CTEST_SITE)
+    set(CTEST_SITE "SITE_NA")
+endif()
+
+if(NOT PLATFORM_NAME)
+    set(PLATFORM_NAME linux)
+endif()
+
+if(NOT BUILD_NAME_PREFIX)
+    set(BUILD_NAME_PREFIX "holoscan-radar")
+endif()
+
+if(NOT CTEST_BUILD_NAME)
+    set(CTEST_BUILD_NAME "${BUILD_NAME_PREFIX}-${PLATFORM_NAME}-${PROJ_NAME}-${TAG}")
+endif()
+
+if(NOT CTEST_NIGHTLY_START_TIME)
+    set(CTEST_NIGHTLY_START_TIME "06:00:00 UTC")
+endif()
+
+set(CTEST_UPDATE_COMMAND "git")
+set(CTEST_CMAKE_GENERATOR "Ninja")
+
+ctest_empty_binary_directory(${CTEST_BINARY_DIRECTORY})
+
+# Compiler-cache store. build-test/ is wiped on every run (above), so the cache
+# must live outside it; .cache/ is gitignored and sits in the bind-mounted tree,
+# so it survives both the wipe and container restarts. Set here rather than in
+# the CLI environment: this is a property of how *this driver* builds, and the
+# wrapper only carries defaults the CLI itself consumes.
+#
+# NOTE: holoscan-cli has first-class sccache support — HOLOSCAN_CLI_ENABLE_SCCACHE=true
+# makes `./holoscan-radar build` set these same three launchers, and `./holoscan-radar setup`
+# installs the RAPIDS sccache. That path does not apply here (this driver calls
+# ctest_configure directly, not `./holoscan-radar build`), hence the local wiring. Worth
+# revisiting: sccache supports remote/shared caches, which is the missing piece
+# for caching across ephemeral CI pods.
+if(NOT DEFINED ENV{CCACHE_DIR})
+    set(ENV{CCACHE_DIR} "${CTEST_SOURCE_DIRECTORY}/.cache/ccache")
+endif()
+
+set(configure_options
+    # Artifact checks use this same GPU/SDK environment, rather than a new runner.
+    -D HOLOSCAN_RADAR_TEST_PACKAGING:BOOL=ON
+    # The dashboard tests both languages by default. Put this before the CLI
+    # options so --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF wins.
+    -D HOLOSCAN_RADAR_BUILD_PYTHON:BOOL=ON
+    ${CONFIGURE_OPTIONS}
+    -D HOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
+    -D CMAKE_BUILD_TYPE=RelWithDebInfo
+    # Installing ccache is not enough — it only takes effect as a compiler
+    # launcher. CCACHE_DIR is set above, outside the wiped build tree.
+    -D CMAKE_C_COMPILER_LAUNCHER=ccache
+    -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
+    -D CMAKE_CUDA_COMPILER_LAUNCHER=ccache
+)
+
+if(PROJ_NAME)
+    list(APPEND configure_options "-D${PROJ_PREFIX}_${PROJ_NAME}=ON")
+endif()
+
+# Developer-invoked runs are experiments, not scheduled dashboard builds; the
+# stock driver's "Nightly" default carries a fixed nightly start time that does
+# not describe this.
+if(NOT DASHBOARD_MODEL)
+    set(DASHBOARD_MODEL "Experimental")
+endif()
+
+# Run every registered test unless the caller supplies label filters.
+set(_label_args)
+if(INCLUDE_LABELS)
+    list(APPEND _label_args INCLUDE_LABEL "${INCLUDE_LABELS}")
+endif()
+if(EXCLUDE_LABELS)
+    list(APPEND _label_args EXCLUDE_LABEL "${EXCLUDE_LABELS}")
+endif()
+
+function(submit_results)
+    if(NOT CTEST_SUBMIT_URL)
+        return()
+    endif()
+
+    ctest_submit(
+        PARTS ${ARGN}
+        RETURN_VALUE submit_result
+        CAPTURE_CMAKE_ERROR submit_error
+        RETRY_COUNT 2
+        RETRY_DELAY 5)
+    if(submit_result OR submit_error)
+        message(WARNING
+            "CDash submission failed (result=${submit_result}, "
+            "cmake_error=${submit_error}); preserving the CI result")
+    endif()
+endfunction()
+
+# Assign the Jenkins override after the local default has been established.
+if(RADAR_CDASH_BUILD_NAME)
+    set(CTEST_BUILD_NAME "${RADAR_CDASH_BUILD_NAME}")
+endif()
+
+ctest_start(${DASHBOARD_MODEL})
+
+# Check configure and build explicitly so a failure in either reports itself.
+# Neither silently passes today, but the configure case misreports: execution
+# continues into ctest_test, which finds an empty binary directory and fails
+# with "No tests were found!!!" — pointing at the test selection rather than at
+# the configure error further up the log. (A build failure already halts the
+# script here.)
+#
+# These stay FATAL_ERROR rather than routing through TEST_FAILURES_FILE: that
+# file exists to let a caller tell test failures from infrastructure failures,
+# and a broken configure or build is the latter.
+ctest_configure(OPTIONS "${configure_options}" RETURN_VALUE configure_result)
+if(configure_result)
+    submit_results(Configure Done)
+    message(FATAL_ERROR "Configure failed with return value: ${configure_result}")
+endif()
+
+set(_build_args RETURN_VALUE build_result)
+if(CTEST_BUILD_FLAGS)
+    list(APPEND _build_args FLAGS "${CTEST_BUILD_FLAGS}")
+endif()
+ctest_build(${_build_args})
+if(build_result)
+    submit_results(Configure Build Done)
+    message(FATAL_ERROR "Build failed with return value: ${build_result}")
+endif()
+
+ctest_test(
+    RETURN_VALUE test_result
+    ${_label_args}
+    OUTPUT_JUNIT "${CTEST_BINARY_DIRECTORY}/test-results.xml")
+
+# A successful empty suite is not coverage. CTest's script mode can return
+# zero for an empty selection; require a non-empty JUnit report explicitly.
+set(_junit_path "${CTEST_BINARY_DIRECTORY}/test-results.xml")
+if(NOT EXISTS "${_junit_path}")
+    submit_results(Configure Build Test Done)
+    message(FATAL_ERROR "CTest did not produce a JUnit report")
+endif()
+file(READ "${_junit_path}" _junit_xml)
+string(REGEX MATCH "tests=\"([0-9]+)\"" _junit_tests "${_junit_xml}")
+set(_test_count "${CMAKE_MATCH_1}")
+if(NOT _junit_tests OR _test_count EQUAL 0)
+    submit_results(Configure Build Test Done)
+    message(FATAL_ERROR "CTest selected zero tests; refusing empty coverage")
+endif()
+message(STATUS "CTest coverage: ${_test_count} tests in the JUnit report")
+
+submit_results(Configure Build Test)
+
+if(test_result)
+    if(DEFINED TEST_FAILURES_FILE)
+        file(WRITE "${TEST_FAILURES_FILE}" "${test_result}")
+    else()
+        submit_results(Done)
+        message(FATAL_ERROR "Tests failed with return value: ${test_result}")
+    endif()
+endif()
+
+submit_results(Done)

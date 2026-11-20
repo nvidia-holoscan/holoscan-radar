@@ -1,0 +1,29 @@
+.bash_history
+.holohub/
+build/
+build-*/
+dist/
+# In-source `cmake -S . -B .` leftovers — never source.
+CMakeFiles/
+CMakeCache.txt
+data/
+# Keep relocated offline data-tool tests tracked.
+!applications/sar/tools/tests/data/
+.claude/
+.cursor/
+.vscode/
+_CPack_Packages/
+__pycache__/
+.cache/
+.cupy/
+.nv/
+.local/
+*.deb
+uv.lock
+.venv/
+core
+
+# Agent and tool spin-off worktrees and session artifacts
+.worktrees/
+
+Testing/

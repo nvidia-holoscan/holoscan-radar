@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+extends: simo.yaml
+app:
+    run:
+        num_frames: 2
+    visualization:
+        enabled: false
+    targets:
+        - range: 245.0
+          azimuth: 0.15
+          elevation: 0.09
+          velocity: [-6.25835, -1.93663, -0.5494]
+          amplitude: 0.8
+    range_loss: null

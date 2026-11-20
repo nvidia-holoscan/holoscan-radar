@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# the autofocus estimation/reformation path on Houston -- a scene-axis config for
+# operators/sar/autofocus_op/tools/sweep.py (see autofocus_atlanta.yaml for why
+# the scene axis exists).
+#
+# Houston is the dense-urban case: a downtown core returns many
+# strong scatterers rather than a few isolated ones, which is the
+# condition PGA's scatterer selection has to survive. A corner
+# reflector gives the window one peak to centre on; a city block
+# gives it several at similar amplitude in the same range bin, and
+# shifting them all to DC averages phase histories that were never
+# the same scatterer. This is the realistic failure mode for the
+# operator's precondition, as opposed to Imperial Valley's "no
+# scatterer at all".
+#
+# Also the one scene here off 9.6 GHz: 9.80 GHz, so rad_per_m is
+# ~411 rather than ~402 and a given metre error is ~2% more phase.
+#
+# Download once (26.13 GiB); the app never reaches the network.
+# Paths resolve under the build data directory (default: data/).
+# applications/sar/tools/config/houston_1m.yaml pulls it.
+
+cphd:
+  path: sar/houston_1p0m.cphd
+  names:
+    - Houston
+  sidecar: ""
+
+# IARP-centred ECEF grid, derived from the CPHD (see
+# autofocus_atlanta.yaml). 1.0 m matches video_sar.yaml's lattice for
+# this collection.
+lattice:
+  counts: 2048
+  spacing: 1.0
+
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 1024
+  # 208753 vectors is a video-SAR pass, far longer than one coherent
+  # dwell; video_sar.yaml forms it in 8262-pulse apertures. Start the
+  # window at the pass centre so the aperture sits where the IARP is
+  # squarely lit rather than at an edge of the collect.
+  pulse_range: [100376, 108638]
+
+aperture_manager:
+  max_aperture_pulses: 8262
+  emit_interval_pulses: 0
+  emit_mode: reform
+
+range_compression:
+  propagation_speed: 299792458.0
+
+backprojection:
+  coordinate_frame: ecef
+
+autofocus:
+  azimuth_axis: u
+  min_scatterers: 16
+  window_fraction: 0.125
+
+phase_correction:
+  sense: subtract
+
+aux_lattice:
+  mode: polar
+
+app:
+  visualization:
+    enabled: false

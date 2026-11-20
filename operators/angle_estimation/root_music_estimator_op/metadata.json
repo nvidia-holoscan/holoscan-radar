@@ -1,0 +1,29 @@
+{
+    "$schema": "urn:holohub:operator:v1",
+    "operator": {
+        "name": "RootMUSICEstimatorOp",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": ["C++"],
+        "version": "1.0.0",
+        "changelog": {
+            "0.5.0": "Allow distinct 2-D sources to share one aperture-axis coordinate during URA pairing",
+            "0.4.0": "Cleanup: exact optional mask, reusable smoothing and bounded URA workspace, captured bounds, all-live timing, and model-order sweep",
+            "0.3.0": "Document radar_boresight as the default angle convention",
+            "0.2.0": "HSDK 5 migration: Operator<RootMUSICParams>, typed Tensor ports, OnEach contract, single-tick POD live Inputs, always-emit optional outputs (no angle_spectrum), stop() MatX teardown",
+            "0.1.0": "Gridless ULA Root-MUSIC with shared MUSIC covariance/eigenspace/EFT front-end, GPU companion-matrix rooting, spatial smoothing, diagnostics, and Python bindings."
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "5.0.0",
+            "tested_versions": ["5.0.0"]
+        },
+        "platforms": ["x86_64", "aarch64"],
+        "tags": ["Radar", "Angle", "Root-MUSIC", "Subspace", "GPU", "FMCW", "SIMO", "MIMO"],
+        "ranking": 3,
+        "requirements": {}
+    }
+}
