@@ -118,16 +118,6 @@ On the campaign Thor deployment, three fresh paired runs of the existing small c
 
 These results concern repeated equal configurations. The separate cached-geometry override event was slower in both phases: fresh float 0.098167→0.114296 ms (+16.129 µs) and double 0.194870→0.207834 ms (+12.964 µs); screen costs were +18.574/+8.461 µs. Fresh cold timings also increased by 0.684 ms for small double, 0.738 ms for medium float and 0.395 ms for large float. These are measured reconfiguration/startup costs, with no frequent-reconfiguration, first-frame, tail or hardware-cause guarantee.
 
-Harness: `performance/operators/angle_estimation/phase_shift_beamformer/adapter.cpp`. Existing small/medium/large profiles vary channels, scan-grid dimensions and RD extent. Live scenarios cover geometry, both coordinate axes and taper. Sidebands precede the triggering `rd_maps`; reports keep the override-event bucket separate from steady timing. No reference results are checked in; run:
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_phase_shift_beamformer_smoke
-```
-
 ## Usage
 
 ```yaml

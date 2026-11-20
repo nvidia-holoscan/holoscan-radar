@@ -72,6 +72,24 @@ class ApplicationBuildScopeTest(unittest.TestCase):
             f'include("{HELPER}")\nholoscan_radar_select_application_build()\n'
         )
 
+    def test_fresh_application_build_selects_only_language_dependencies(self):
+        for python_enabled in (False, True):
+            with self.subTest(python=python_enabled), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                self.fixture(directory)
+                self.configure(
+                    directory,
+                    "-DHOLOSCAN_RADAR_APPLICATION=spotlight",
+                    "-DBUILD_ALL=OFF",
+                    f"-DHOLOSCAN_RADAR_BUILD_PYTHON={'ON' if python_enabled else 'OFF'}",
+                )
+                commands = self.commands(directory)
+                self.assertIn("REQUIRED", commands)
+                self.assertNotIn("UNRELATED", commands)
+                self.assertEqual("PYTHON" in commands, python_enabled)
+                self.assertEqual("SPOTLIGHT" in commands, not python_enabled)
+                self.assertEqual("PROVIDER_OPERATOR" in commands, python_enabled)
+
     def test_reused_broad_cache_switches_languages_without_building_unrelated_targets(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -101,7 +119,6 @@ class ApplicationBuildScopeTest(unittest.TestCase):
         for variable in (
             "BUILD_ALL",
             "HOLOSCAN_RADAR_BUILD_TESTING",
-            "HOLOSCAN_RADAR_BUILD_PERFORMANCE",
             "PKG_holoscan_radar",
             "MODULE_holoscan_radar",
             "SKBUILD",

@@ -100,16 +100,6 @@ The fused `rd_maps` follow the split-chain numerical contract. The shared stages
 
 **Steady.** Cached coefficients reused; each tick loans `rd_maps` (and the two axes when a waveform is set), writes `profiles`, and enqueues clutter-into-Doppler. Versus the split chain this saves one full-cube write+read, one kernel launch, and one async alloc/free per tick **plus** the graph-level cost of the extra split nodes. The FFTs still dominate. Compare whole workflows when deciding whether fusion helps an application.
 
-Harness: `performance/operators/fmcw/fmcw_range_doppler_processor/recipe.yaml` defines small, medium, and large profiles plus explicit parameter and one-frame live cases; its colocated `adapter.cpp` supplies contract-specific values. The tool times this operator alone. No measured numbers are recorded in-tree.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_fmcw_range_doppler_processor_smoke
-```
-
 ## Usage
 
 The example applications use the split chain. A fused node is constructed the same way:

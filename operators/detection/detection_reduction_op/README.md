@@ -124,19 +124,9 @@ Thin operator over the public `radar_common/reduce/` group-by-label primitive (`
 
 **Live rebuilds.** `representative` / `score_method` are free policy switches (no cached kernel). A `feature_weights` override re-uploads the weight vector on the tick it arrives.
 
-Harness: `performance/operators/detection/detection_reduction/adapter.cpp` (Graph triple-in, both outputs consumed). Axes: detection count, cluster count, policy {first, peak, medoid, weighted_mean}. The comparison below did not time live-override events.
-
 A paired Thor HSDK 5 check (5 warmups, 50 measured frames, three fresh pairs) measured large float/double paired median reductions of 111.181µs/37.848% and 109.894µs/37.217%. All three target pairs and all selected endpoint rules passed. All 150 fresh compute samples per endpoint, including outliers, summed to lower time at every selected endpoint (4.52–37.67% reductions). Both builds passed 43 native tests, including a three-tile sparse-label oracle, and nine-case both-precision input-derived coupled output validation.
 
 These are scoped results with observed costs: individual small/optional processes were 6–9% (about 13–18µs) slower, including an optional-double slowdown in both screening and fresh checks in opposite execution orders. Screen optional-double also had a 2.113ms frame; fresh float setup increased about 0.227ms on the large case and 0.240ms on the small case. The larger target benefit was accepted with those costs; individual-process latency, tails, startup and live events are not guaranteed to improve.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_detection_reduction_smoke
-```
 
 ## Usage
 

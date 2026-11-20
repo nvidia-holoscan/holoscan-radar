@@ -102,9 +102,7 @@ pairs, input data, visualization, and CLI examples.
 
 For manual CMake and targeted CTest work **inside** a development container,
 see [`DEVELOPER.md`](DEVELOPER.md#inside-a-development-container). The same
-guide covers host-side lint. Performance measurements and their container-side
-build commands are documented in [`DEVELOPER.md`](DEVELOPER.md#performance-characterization)
-and [performance/README.md](performance/README.md).
+guide covers host-side lint.
 
 ## Project references
 

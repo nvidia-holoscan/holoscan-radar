@@ -101,16 +101,6 @@ Output extents are inferred each tick from `adc_cube` and `tx_schedule.num_tx`:
 
 **Cold.** First tick (or a new `(slow_time, TXSchedule)` pair): host `expand_chirp_tx_index` / `build_gather_map`, async H2D of the gather indices into the ctor-sized table, then the row-copy kernel. **Steady.** Same schedule and slow-time: kernel only, gather map reused. No FFT plans, no window coefficients. Per tick the operator loans one output tensor from the Graph pool.
 
-There are no `[live]` overrides. Size-ladder axes in `performance/operators/fmcw/mimo_deinterleave/adapter.cpp`: `(M_tx, N_rx, L, samples)` at rungs `xs` (2, 4, 8, 64), `sm` (4, 8, 16, 128), `md` (4, 16, 32, 256), `lg` (8, 32, 64, 512), `xl` (8, 64, 128, 1024), variant `rr` (round-robin). No leading-batch rung (opaque batch is out of scope). No measured numbers are recorded in-tree; run the harness:
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_mimo_deinterleave_smoke
-```
-
 ## Usage
 
 ```yaml

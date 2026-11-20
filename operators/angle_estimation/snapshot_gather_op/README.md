@@ -118,16 +118,6 @@ On Thor, `baseline-large` (32 channels, 512 × 1024 RD cells, 4096 detections, n
 
 These are scoped steady gains with tradeoffs. Fresh small-double p99 increased 30.43 µs and optional-output-minimal float p99 increased 35.56 µs; both also worsened in the screen. One large-double fresh frame reached 5.177 ms versus its original pair's maximum 3.195 ms despite a useful median. Fresh medium-double setup increased 0.835 ms and optional-minimal float cold time increased 18.41 µs. Fifty-frame p99 is descriptive; no startup, tail, arbitrary-shape, multi-GPU or direct consumer-chain guarantee is implied.
 
-Harness: `performance/operators/angle_estimation/snapshot_gather/adapter.cpp` (Graph dual-input runner). Size ladder `xs`…`xl` (channels × RD map × detection count) and windows `{0,0}`, `{1,1}`, `{2,2}`. It records cold, steady, and inline Exact `snapshot_window` override timing. Run the harness on the target deployment:
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_snapshot_gather_smoke
-```
-
 ## Usage
 
 ```yaml

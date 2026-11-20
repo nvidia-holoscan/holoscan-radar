@@ -283,16 +283,6 @@ correlated receiver noise, shared-LO phase noise, mutual coupling, or clutter
 residue lower the effective degrees of freedom; calibrate an effective value
 or provide `alpha_lut` when nominal Pfa must be maintained under those models.
 
-Harness: `performance/operators/detection/cfar_detector/adapter.cpp` (Graph). It wires all five outputs, so steady timings include publication copies plus index compaction. Axes include size, variant, footprint, NCI fold, peak mode/radius, and alpha source. Rank-3/4 `all` rows characterize full N-D NMS.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_cfar_detector_smoke
-```
-
 ## Usage
 
 ```yaml

@@ -153,15 +153,7 @@ Rejected combinations (operator’s message unless noted):
 
 **Steady.** Covariance + eig + projector every tick on stable operator-owned workspace; then one serial `cusolverDnXgeev` per item per rooted polynomial (ULA: one of degree `2(C−1)`; URA: two smaller companions plus pairing). The serial hybrid dominates latency; a batched device root solver is postponed, not a contract gap. The private ULA/URA end-clear sites have been removed (one alternate site per nonempty tick); matching MatX eig plans are retained until eviction/stop, with both live marks and existing stop retirement unchanged. Distinct configuration keys can retain workspace; current serialized device 0 scope does not establish memory bounds across arbitrary CUDA contexts or configuration histories.
 
-**`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the aperture and rebuilds the smoothing plan (and can resize the cuSOLVER workspace) on the tick it arrives. The Graph harness isolates all five live inputs.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_root_music_estimator_smoke
-```
+**`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the aperture and rebuilds the smoothing plan (and can resize the cuSOLVER workspace) on the tick it arrives.
 
 Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also adds URA rungs (`ura_sm` 6×6, `ura_lg` 8×8). Every geometry isolates production Exact timing for `array_geometry`, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources`, plus separate fixed model-order scenarios at 1, 2, and `min(4, num_channels − 1)`.
 

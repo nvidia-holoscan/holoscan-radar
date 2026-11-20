@@ -56,27 +56,9 @@ radar_add_test(common/test_ddm_code_generators
     holoscan::radar_common_mimo_compensation)
 radar_add_test(common/test_live_override_payloads)
 radar_add_test(common/test_wire_descriptors holoscan::radar_schemas)
-# The performance harness parses its YAML recipes with yaml-cpp, which HSDK 5
-# no longer re-exports.
-find_package(yaml-cpp REQUIRED)
 radar_add_test(common/test_sdk holoscan::config_io)
 radar_add_test(common/test_emit_required)
 radar_add_test(common/test_max_tensor_extents holoscan::config_io)
-radar_add_test(utils/test_perf_profiles yaml-cpp)
-radar_add_test(utils/test_perf_runner)
-radar_add_test(utils/test_perf_yaml_standard yaml-cpp holoscan::doppler_notch_op
-    holoscan::fmcw_range_processor_op holoscan::subarray_selection_op)
-target_include_directories(test_perf_yaml_standard PRIVATE
-    ${PROJECT_SOURCE_DIR}/performance/harness/cpp
-    ${PROJECT_SOURCE_DIR}/operators)
-target_include_directories(test_perf_runner PRIVATE ${PROJECT_SOURCE_DIR}/performance/harness/cpp)
-target_include_directories(test_perf_profiles PRIVATE
-    ${PROJECT_SOURCE_DIR}/performance/harness/cpp
-    ${PROJECT_SOURCE_DIR}/operators)
-target_compile_definitions(test_perf_profiles PRIVATE
-    HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
-target_compile_definitions(test_perf_yaml_standard PRIVATE
-    HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
 radar_add_test(common/test_sim)
 radar_add_test(common/test_sar_progress)
 radar_add_test(common/test_window_place ${CMAKE_DL_LIBS})

@@ -252,13 +252,3 @@ set a device error flag; the host maps it after a stream sync **before**
 **Cold.** First non-empty tick: feature-id H2D into the ctor-sized table; score leading-dims upload when `score` is gathered with preserved batch. **Steady.** Offset kernel (if preserved score batch) + assemble kernel + error-flag sync + one `points` loan. Feature ids reuse after the first successful non-empty emit. Score leading dims re-upload only when that layout changes. A cache miss does not `cudaMalloc`.
 
 No `[live]` overrides. `features` cannot change mid-stream.
-
-Harness: `performance/operators/detection/feature_assembly/adapter.cpp`. Axes: map-size ladder (`xs`…`xlw`) × detection-count. The driver times the physical `{range, velocity}` pack with aligned axis inputs; score / AoA / dense paths are unit-tested. No measured numbers are recorded in-repo.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_feature_assembly_smoke
-```

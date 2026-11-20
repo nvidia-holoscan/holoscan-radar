@@ -52,7 +52,6 @@ holoscan-radar/
 ├── python/holoscan_radar/
 │   ├── _radar.cpp                  # HSDK 5 FMCW operator provider
 │   └── applications/              # Shared Python Graph helpers
-├── performance/                   # C++ YAML recipes, adapters, and shared runner
 └── tests/
     ├── cpp/                        # GTest suite (+ utils/: fixtures and Graph helpers)
     └── provider/                   # Operator provider and Graph pytest suite
@@ -229,7 +228,7 @@ requests can still build any enabled target. C++/Python switches select the righ
 default target when reusing the same application directory.
 
 CLI `--configure-args` follow the mode defaults. An explicit `BUILD_ALL=ON`,
-`HOLOSCAN_RADAR_BUILD_TESTING=ON`, `HOLOSCAN_RADAR_BUILD_PERFORMANCE=ON`, or
+`HOLOSCAN_RADAR_BUILD_TESTING=ON`, or
 `PKG_holoscan_radar=ON` retains the broad default build. Module-wide tests enable
 their required operator libraries even with `BUILD_ALL=OFF`. To disable only the
 application default selection, pass `--configure-args=-DHOLOSCAN_RADAR_APPLICATION=`.
@@ -260,7 +259,7 @@ cmake --build build -j"$(nproc)"
 Run the C++ tests or a built SISO executable inside the same container:
 
 ```bash
-ctest --test-dir build --output-on-failure -LE performance
+ctest --test-dir build --output-on-failure
 ./build/applications/fmcw/siso/cpp/siso \
   build/applications/fmcw/siso/cpp/siso_smoke.yaml
 ```
@@ -302,24 +301,6 @@ build directory when invoking pytest directly.
 Python `[live]` enum ports remain unavailable until the SDK can register those
 port payloads.
 
-### Performance characterization
-
-Run these commands **inside** the development container after opening it as
-described above. These are diagnostic measurements, not pass/fail latency
-thresholds:
-
-```bash
-cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON
-cmake --build build -j"$(nproc)"
-ctest --test-dir build --output-on-failure -L performance
-./build/performance/cpp/perf_cfar_detector --full
-```
-
-The 26 C++ performance tools read colocated YAML recipes and report setup,
-first-frame, steady-state, and live-update latencies. Results depend on the
-GPU and host. See [performance/README.md](performance/README.md) for scopes,
-recipes, and output formats.
-
 ---
 
 ## Blossom CI for pull requests
@@ -354,13 +335,12 @@ What it does, and where to change it:
   inside the pip install tree and cannot see this repo.
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
-- Runs every registered C++ tier except `performance`, which has its own invocation,
-  plus the Python `pytest_provider` binding and Graph suite by default. The C++
+- Runs every registered C++ tier, plus the Python `pytest_provider` binding and Graph suite by default. The C++
   tier includes the Monte Carlo `statistical` tests; the provider has no Python
   statistical suite. Pass `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`
   for a C++-only run. Narrow to one tier with
-  `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
-  `-DEXCLUDE_LABELS='performance|statistical'`.
+  `--ctest-options='-DINCLUDE_LABELS=statistical'`, or exclude tiers with
+  `-DEXCLUDE_LABELS='statistical|visualization'`.
 - Enables `HOLOSCAN_RADAR_TEST_PACKAGING` and runs `Packaging_debian` plus
   `Packaging_wheel` (the latter when Python is enabled). These serial integration
   checks build fresh artifacts through `holoscan package holoscan-radar`

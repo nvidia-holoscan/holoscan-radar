@@ -115,16 +115,6 @@ A local Thor HSDK 5 engineering check used five warmups, 50 steady frames, three
 
 Startup and tails are separate tradeoffs: fresh medium-float cold latency increased 0.712 ms, optional-minimal double setup increased 1.217 ms, large-double p99 increased 0.080 ms and small-float p99 increased 0.008 ms. The cached interpolation event changed 2.757 → 2.556 ms in float and 63.189 → 63.196 ms in double. Fifty-frame tails are descriptive; the retained benefit targets streaming large float workloads and establishes no startup or tail guarantee.
 
-Harness: `performance/operators/angle_estimation/beamscan_estimator/adapter.cpp` (Graph). Size ladder `xs`…`xl` (channels × detections × scan grid). Every selected size runs five isolated inline-override scenarios and reports `override_ms` / `override_delta_ms` for geometry, azimuth grid, elevation grid, taper, and interpolation. Optional `is_valid` is omitted from performance runs. No reference results are checked in; run:
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_beamscan_estimator_smoke
-```
-
 ## Usage
 
 ```yaml

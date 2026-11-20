@@ -139,17 +139,7 @@ On Thor, `optional-minimal-medium` (8 channels, 128 items, 32 snapshots, 41 × 2
 
 Startup and tails varied: fresh cached-smoothing double cold time increased 1.830 ms, medium float cold time increased 0.679 ms, and large double median p99 increased 0.246 ms (worst maximum +1.208 ms). One target pair also had slightly worse tails despite a better median. Fifty-frame p99 is descriptive; these results provide no startup, tail, arbitrary-shape or multi-GPU guarantee.
 
-**`[live]` cost.** `diagonal_loading` is free. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The Graph harness isolates all six live inputs.
-
-Run this performance smoke **inside a development container**, after
-configuring the named build tree with performance enabled (see the
-[developer guide](../../../DEVELOPER.md#performance-characterization)):
-
-```bash
-ctest --test-dir build -R perf_mvdr_estimator_smoke
-```
-
-Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`xl`; default smoke `xs`/`sm`/`md`). Every size isolates production Exact timing for `array_geometry`, both scan grids, `spatial_smoothing`, `diagonal_loading`, and `max_sources`. Run the harness on the target GPU; results are hardware-dependent.
+**`[live]` cost.** `diagonal_loading` is free. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives.
 
 ## Usage
 
