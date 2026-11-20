@@ -150,8 +150,6 @@ Startup and tails remain separate tradeoffs: fresh large-double setup increased 
 
 **`[live]` cost.** Scalar overrides are cheap; `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the pair, rebuilds the smoothing plan, and (auto URA) re-uploads the invariance tables on the tick it arrives.
 
-Harness axes: channels, detections, snapshots (ULA `xs`…`xl`); default matrix includes `ura_sm` (6×6); `--full` adds `ura_lg` (8×8). Each size runs isolated production-Exact scenarios for `array_geometry`, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources`. The Pfa scenario uses automatic source count; other steady paths fix one source.
-
 ## Usage
 
 ```yaml

@@ -168,8 +168,6 @@ Startup and tails are separate tradeoffs: cached-smoothing float cold time incre
 
 **`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The reduce kernel stages `P_n` in shared memory only when it fits a 40 KiB budget **and** the item grid covers at least one occupancy wave; otherwise it reads `P_n` from global memory.
 
-Harness (Graph, isolated production-Exact timing for every live input):
-
 ## Usage
 
 `array_geometry` is usually built by the caller and applied with `set_params`. Other fields match `MUSICParams` / YAML `from_config`.

@@ -41,7 +41,7 @@ execution, not focus on public collections.
 | [Detection](operators/detection/README.md) | CFAR, feature assembly, cluster reduction, selective multi-source expansion |
 | [Angle estimation](operators/angle_estimation/README.md) | Snapshot gathering, array selection, Beamscan, MVDR, MUSIC, Root-MUSIC, ESPRIT, and dense beamforming |
 | [Clustering](operators/clustering/README.md) | DBSCAN over caller-selected detection features |
-| [SAR](operators/sar/README.md) | Range compression, aperture management, backprojection, and phase correction |
+| [SAR](operators/sar/README.md) | Range compression, aperture management, backprojection, phase correction, and autofocus |
 | [SAR I/O](operators/io/README.md) | CPHD decoding and diagnostic tensor dumps |
 
 Every public operator README starts with the same compact reference: purpose,
@@ -68,6 +68,7 @@ Shared descriptors and tensor conventions are documented in
 | [SAR tiled strip](applications/sar/tiled_strip/README.md) | Tile formation and parent mosaic |
 | [SAR continuous strip](applications/sar/continuous_strip/README.md) | Scrolling lattice and parent mosaic |
 | [SAR independent images](applications/sar/independent_images/README.md) | One restaged image per collection |
+| [SAR autofocus](applications/sar/autofocus/README.md) | Estimate phase error on an auxiliary image, correct retained pulses, and form the product |
 
 Application READMEs include the exact graph and runnable commands. Shared graph
 driving, simulation sources, reporting, and visualization support lives in

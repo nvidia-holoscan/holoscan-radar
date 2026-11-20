@@ -154,8 +154,6 @@ Rejected combinations (operator’s message unless noted):
 
 **`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the aperture and rebuilds the smoothing plan (and can resize the cuSOLVER workspace) on the tick it arrives.
 
-Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also adds URA rungs (`ura_sm` 6×6, `ura_lg` 8×8). Every geometry isolates production Exact timing for `array_geometry`, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources`, plus separate fixed model-order scenarios at 1, 2, and `min(4, num_channels − 1)`.
-
 ## Usage
 
 ```yaml

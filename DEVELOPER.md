@@ -33,7 +33,7 @@ holoscan-radar/
 │           └── metadata.json       # Operator-level metadata
 ├── applications/
 │   ├── common/radar_app/            # Shared Graph/config/report/dashboard support
-│   ├── sar/                        # Six standalone C++ SAR apps
+│   ├── sar/                        # Six standalone C++/Python SAR apps
 │   │   ├── spotlight/
 │   │   ├── video_sar/
 │   │   ├── tiled_strip/
@@ -50,7 +50,7 @@ holoscan-radar/
 │       └── mimo_ddm/
 ├── applications/sar/tools/               # Optional CPHD download/subset CLIs
 ├── python/holoscan_radar/
-│   ├── _radar.cpp                  # HSDK 5 FMCW operator provider
+│   ├── _radar.cpp                  # HSDK 5 FMCW/SAR operator provider
 │   └── applications/              # Shared Python Graph helpers
 └── tests/
     ├── cpp/                        # GTest suite (+ utils/: fixtures and Graph helpers)
@@ -183,7 +183,7 @@ compatible Vulkan presentation surface. Startup logs
 `Radar presentation: X11 finished-image transport` for X11,
 or `Radar presentation: CUDA device <N>` for the native window path.
 
-All seven FMCW workflows (C++ and Python) and all five SAR applications retain
+All seven FMCW workflows (C++ and Python) and all six SAR applications retain
 the caller's current CUDA device for computation. CUDA ordinals are relative to
 the devices visible inside the container.
 
@@ -264,7 +264,7 @@ ctest --test-dir build --output-on-failure
   build/applications/fmcw/siso/cpp/siso_smoke.yaml
 ```
 
-Run all five SAR fixture and headless visualization paths inside the same
+Run all six SAR fixture and headless visualization paths inside the same
 container without public data:
 
 ```bash
@@ -273,7 +273,7 @@ ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure
 
 For individual SAR build gates use `-DBUILD_ALL=OFF -DAPP_spotlight=ON`
 (or `APP_video_sar`, `APP_tiled_strip`, `APP_continuous_strip`,
-`APP_independent_images`). See the [SAR app index](applications/sar/README.md)
+`APP_independent_images`, or `APP_autofocus`). See the [SAR app index](applications/sar/README.md)
 for mode-specific graphs, [data preparation](applications/sar/tools/README.md) for
 optional public collections, and the [SAR operator index](operators/sar/README.md).
 The fixture is generated in C++; C++ applications do not require the Python
