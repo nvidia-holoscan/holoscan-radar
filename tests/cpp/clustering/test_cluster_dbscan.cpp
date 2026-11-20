@@ -20,6 +20,8 @@
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/diagnostic.hpp>
+#include <holoscan/core/errors.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
 #include "utils/fixture_completion.hpp"
@@ -505,9 +507,15 @@ void check_point_capacity() {
   const auto overflow = run_dbscan_result<T>(points_tensor<T>({0.0, 0.0, 0.1, 0.1, 0.2, 0.2}, 3, 2),
                                              make_params({0.5}, 2), extents);
   EXPECT_FALSE(overflow.ok());
-  EXPECT_NE(overflow.describe_failure().find("exceeds MaxTensorExtents.max_points 2"),
-            std::string::npos)
-      << overflow.describe_failure();
+  // Assert the original cause; describe_failure() may wrap the message for display.
+  const auto diagnostics = overflow.diagnostics();
+  EXPECT_TRUE(std::any_of(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+    return diagnostic.detail &&
+           diagnostic.detail->operation == holoscan::DiagnosticOperation::kCompute &&
+           diagnostic.detail->error.code == holoscan::ErrorCode::kInvalidArgument &&
+           diagnostic.detail->error.message ==
+               "ClusterDBSCANOp: num_points 3 exceeds MaxTensorExtents.max_points 2";
+  })) << overflow.describe_failure();
   EXPECT_TRUE(overflow.template snapshots<holoscan::Tensor>("labels").empty());
 }
 
