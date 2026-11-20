@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **AIVO merge of main after SAR GUI squash** on
+  `deustice/aivo-fixes`: resolve eleven conflicts while retaining the AIVO
+  hardening and regression coverage. Incoming `bc2a3f3b` has the identical tree
+  to already-integrated SAR GUI `d6aefe49`; no incoming product changes are lost.
+  All 76 CPHD preparation and 23 host-side tests plus full pinned lint pass.
+  The merge changes history and this status record only.
+
 - **2026-11-19** — **AIVO branch SAR GUI integration validation** on
   `deustice/aivo-fixes`: merged `deustice/sar-gui` through `3ed553af` without
   conflicts. Full build and lint pass; 47 focused SAR/display/X11 checks pass.
