@@ -9,7 +9,7 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.4.0",
+        "version": "1.0.0",
         "changelog": {
             "0.4.0": "Publish is_valid before snapshot for downstream Exact coherence",
             "0.3.0": "Tick-shell cleanup, reusable workspace, complete coordinate validation",

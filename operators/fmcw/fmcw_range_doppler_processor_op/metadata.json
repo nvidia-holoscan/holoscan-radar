@@ -9,7 +9,7 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.2.0",
+        "version": "1.0.0",
         "changelog": {
             "0.2.0": "Use doppler_window for mean-subtraction projection and analysis",
             "0.1.0": "Initial Release"

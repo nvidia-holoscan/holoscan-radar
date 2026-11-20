@@ -9,7 +9,7 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.9.0",
+        "version": "1.0.0",
         "changelog": {
             "0.9.0": "Rename convention-dependent scan parameters and live ports to az_coordinates and el_coordinates",
             "0.8.0": "Reject non-finite scan coordinates and direction-cosine axis values outside [-1, 1]",

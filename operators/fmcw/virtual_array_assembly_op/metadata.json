@@ -9,7 +9,7 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.3.0",
+        "version": "1.0.0",
         "changelog": {
             "0.3.0": "Change array_geometry from a packed Tensor port to bounded host-backed WireArrayGeometry",
             "0.2.0": "Tick-shell cleanup: ctor-sized index tables, fail-closed rank 4",
