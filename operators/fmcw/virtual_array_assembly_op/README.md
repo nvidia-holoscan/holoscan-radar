@@ -40,9 +40,9 @@ Declarations and parameter defaults: [virtual_array_assembly_op.hpp](virtual_arr
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
-| `tx_positions` | float vector, row-major `(num_tx, 3)` | none (required) | static (Params-only) | TX element positions (m). Length must match input `M_tx` Cost: Rebuilds the virtual plan + H2D into the ctor-sized index tables. |
-| `rx_positions` | float vector, row-major `(num_rx, 3)` | none (required) | static (Params-only) | RX element positions (m). Length must match `N_rx` Cost: Same as `tx_positions`. |
-| `wavelength` | float | none (required) | `[live]` Exact | Operating wavelength (m) for emitted geometry (`c / carrier_frequency`) Cost: Free for the gather; wire geometry metadata is rewritten each tick. |
+| `tx_positions` | float64 vector, row-major `(num_tx, 3)` | none (required) | static (Params-only) | TX element positions (m). Length must match input `M_tx` Cost: Rebuilds the virtual plan + H2D into the ctor-sized index tables. |
+| `rx_positions` | float64 vector, row-major `(num_rx, 3)` | none (required) | static (Params-only) | RX element positions (m). Length must match `N_rx` Cost: Same as `tx_positions`. |
+| `wavelength` | float64 | none (required) | `[live]` Exact | Operating wavelength (m) for emitted geometry (`c / carrier_frequency`) Cost: Free for the gather; wire geometry metadata is rewritten each tick. |
 | `overlap_policy` | enum `{dedup, average, keep_all}` | `dedup` | static (Params-only) | Coincident `p_virtual` handling; sets `num_virtual` Cost: Rebuilds the plan (gather vs average kernel). |
 
 ## Algorithm
@@ -82,7 +82,7 @@ row  num_virtual:       [wavelength, geometry_type_code, 0]
   geometry_type_code: 0=ULA, 1=URA, 2=UCA, 3=CONFORMAL; NaN if unset
 ```
 
-Consumers receive the coherent descriptor with `from_wire`; direct angle operators do that in their live resolvers. Virtual positions do not depend on wavelength; only metadata does. `num_doppler` and `num_range` pass through unchanged. This is the public dense virtual-array boundary; fused sparse TDM/DDM operators emit the same sanctioned descriptor beside their final snapshots. C++ graphs connect it directly to angle operators' same-schema live inputs. Python remains on equivalent static Params because generated schema payloads are not exposed there.
+Consumers receive the coherent descriptor with `from_wire`; direct angle operators do that in their live resolvers. Virtual positions do not depend on wavelength; only metadata does. `num_doppler` and `num_range` pass through unchanged. This is the public dense virtual-array boundary; fused sparse TDM/DDM operators emit the same sanctioned descriptor beside their final snapshots. C++ graphs connect it directly to angle operators' same-schema live inputs. Python graphs can connect registered native descriptor ports directly, including these geometry sidebands. Logical descriptor mappings configure static Params; arbitrary generated wire-object construction is not exposed in Python.
 
 ## Shape and dtype rules
 

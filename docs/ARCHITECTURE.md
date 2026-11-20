@@ -200,19 +200,20 @@ surface:
 - every producing and consuming application or control-plane component; and
 - Python configuration and bindings documentation.
 
-The generated wire object types are C++-only. Current Python operator support
-cannot construct or publish them, so Python callers configure the equivalent
-logical values through Params. That limitation does not change the logical
-`[live]` contract and must be re-evaluated when the Python payload surface
-gains schema-object support.
+Python graphs can connect registered native descriptor outputs to matching
+`[live]` inputs, including geometry and waveform sidebands. The provider
+registers those payload identities so the connection preserves the C++ temporal
+contract. Python does not expose constructors for arbitrary generated wire
+objects; callers author logical descriptor mappings through Params or use a
+native producer for live values. Python enum live inputs retain the SDK
+limitation documented in [DEVELOPER.md](../DEVELOPER.md#python-provider).
 
 `VirtualArrayAssemblyOp.array_geometry` and
 `SubarraySelectionOp.array_geometry` are runtime producers of
 `WireArrayGeometry`. Their pageable-host descriptor-Tensor pools are bounded
 from `MaxTensorExtents`; the internal `(N + 1, 3)` float64 packing remains an
-implementation detail of the shared wire schema. C++ graphs can connect these
-outputs directly to angle operators' same-schema Exact live inputs. Python
-applications remain Params-only until generated payload ports are exposed.
+implementation detail of the shared wire schema. C++ and Python graphs can
+connect these outputs directly to angle operators' same-schema Exact live inputs.
 
 ## Implementation lifetime rules
 

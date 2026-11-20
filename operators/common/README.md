@@ -24,7 +24,7 @@ compiling `group_by_label.cu` again.
 
 ## Shared descriptor types
 
-The public configuration plane has seven descriptors:
+The public configuration plane has ten descriptors:
 
 - `ArrayGeometry`
 - `ShiftInvariantSubarrayPair`
@@ -33,9 +33,13 @@ The public configuration plane has seven descriptors:
 - `FMCWWaveformDescriptor`
 - `DDMCodeDescriptor`
 - `TXSchedule`
+- `CoordinateFrame`
+- `SampleGeometry`
+- `LFMWaveformDescriptor`
 
 They are ordinary parameters and may also use same-named live input ports where
-an operator documents a live override. `MaxTensorExtents` is different: it is a
+an operator documents a live override. The [wire-schema catalog](radar_schemas/README.md)
+maps logical descriptors to their physical port payloads. `MaxTensorExtents` is different: it is a
 constructor sizing object used to bound tensor pools before graph activation;
 it never travels on a port.
 
