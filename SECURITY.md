@@ -53,7 +53,7 @@ This repository does **not** implement network listeners, authentication, or rem
 
 The following scenarios reflect the main security concerns for this codebase, including auxiliary paths:
 
-1. **Malicious or untrusted application configuration (YAML):** Attacker-controlled config files consumed by demo loaders (Holoscan `config_io` / `yaml.safe_load`) or Holoscan `params::decode` can change operator parameters, graph wiring (e.g., `peak_only` gating clustering), and visualization settings, leading to denial of service, unexpected processing behavior, or unsafe resource use if writers of those files are not controlled.
+1. **Malicious or untrusted application configuration (YAML) and CPHD inputs:** Attacker-controlled config files consumed by demo loaders (Holoscan `config_io` / `yaml.safe_load`) or Holoscan `params::decode`, and CPHD files read by the SAR tools, can change operator parameters, graph wiring (e.g., `peak_only` gating clustering), and visualization settings, leading to denial of service, unexpected processing behavior, or unsafe resource use if writers of those files are not controlled.
 
 2. **Untrusted tensor / parameter inputs to GPU operators:** Malformed shapes, sizes, or values on ports into FMCW, CFAR, clustering, or angle-estimation operators (MatX/CUDA paths under `operators/`) can cause process crashes, GPU faults, or resource exhaustion; impact is generally bounded by the host process unless the platform provides stronger isolation.
 
@@ -70,7 +70,7 @@ The following scenarios reflect the main security concerns for this codebase, in
 ### Critical Security Assumptions
 
 - **Trusted application authors and operators:** Holoscan Radar does not sandbox caller code or Python; deployers must treat application graphs and operators as trusted or isolate them externally (containers, separate hosts, least privilege).
-- **Trusted configuration and artifacts:** YAML configs, waveform descriptors, schedules, and shared libraries are assumed to come from trusted sources or to be integrity-checked by the deployer.
+- **Trusted configuration and artifacts:** YAML configs, CPHD files, waveform descriptors, schedules, and shared libraries are assumed to come from trusted sources or to be integrity-checked by the deployer. Declared dimensions in configs and CPHD metadata are checked for consistency and integer overflow, but are not capped at fixed sizes, because supported array sizes vary by hardware platform; allocations grow with the requested dimensions. Deployers who accept untrusted inputs should enforce memory and GPU limits outside the module, for example with container resource limits or input-size checks.
 - **No network security surface in this module:** The library assumes any network, distributed execution, or remote I/O is provided and hardened by Holoscan SDK features or external infrastructure outside this repository’s defaults.
 - **Correct and patched platform stack:** Assumes a patched OS, NVIDIA GPU drivers, CUDA, Holoscan SDK, MatX, and related runtimes as supplied by the platform or container maintainer.
 - **Host OS enforcement:** Process isolation and file permissions are assumed to prevent unauthorized modification of binaries, configs, and models/data used by production pipelines.
