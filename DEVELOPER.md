@@ -305,14 +305,20 @@ port payloads.
 
 ## Blossom CI for pull requests
 
-Blossom accepts `/build` comments only from its maintainer allowlist. Its
-credential-bearing vulnerability scan and dependent CI trigger run only when
-the authorized PR source repository matches this repository. Fork PRs are
-skipped; a maintainer must review the changes and copy the reviewed commit to
-a branch here before requesting a Blossom build. Ordinary PR lint workflows
-keep their own triggers. The scanner token permits content reads and
-commit-status writes. The pinned action runs a bundled scanner binary; this
-restriction avoids giving its build-enabled scanner outside-repository code.
+Blossom accepts `/build` comments only from its maintainer allowlist. A
+maintainer must review the PR before requesting a build, including PRs from
+forks: the credential-bearing scanner can build the authorized source tree.
+Checkout uses the repository and revision returned by Blossom authorization
+and does not persist Git credentials. The scanner token inherits the
+repository's default workflow permissions. Ordinary PR lint workflows keep
+their own triggers.
+
+Blossom validates the workflow on the repository's default branch against its
+supported templates before starting the scan or Jenkins build. Keep the scan
+job's condition, permissions, and checkout settings aligned with a supported
+template; additional restrictions can fail this check. The checkout and scanner
+actions remain pinned to immutable revisions. A workflow repair must reach the
+default branch before a new `/build` request can use it.
 
 ## From the host: full test suite
 
