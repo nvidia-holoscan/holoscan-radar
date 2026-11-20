@@ -19,13 +19,15 @@ Declarations and parameter defaults: [backprojection_op.hpp](backprojection_op.h
 
 `T=float` means complex64/float32; `T=double` means complex128/float64.
 
-A second parameter sets the geometry precision: `BackprojectionOp<T, TGeom>`
-defaults `TGeom` to `T`, and the geometry ports take `TGeom` while samples and
-the image take `T`. `<float, double>` keeps ECEF geometry in float64 while
-keeping positions in float64, which they need: ECEF coordinates do not survive
-float32, where one ulp at a 6.4e6 m radius is 0.76 m -- some 25 wavelengths at
-X band. `range_bins` and `weight` stay on `T`, because their producers are
-sample-precision. `TGeom` may not be coarser than `T`.
+A second template parameter sets geometry precision:
+`BackprojectionOp<T, TGeom>` defaults `TGeom` to `T`. `positions`,
+`reference_position`, and `sample_points` use `TGeom`; profiles, images,
+`range_bins`, and `weight` use `T`.
+
+`<float, double>` keeps ECEF geometry in float64 while using single-precision
+samples/images. At a coordinate magnitude of 6.4e6 m, adjacent float32 values
+are 0.5 m apart, many wavelengths at X band. `TGeom` may not be coarser than `T`.
+
 The three pulse tensors are required and aligned. All optional `[live]`
 inputs are per-tick `Exact{}`/`SafeDefault{}` joins; `control` is the optional
 emit trigger and is normally supplied by `ApertureManagerOp.control_out`.

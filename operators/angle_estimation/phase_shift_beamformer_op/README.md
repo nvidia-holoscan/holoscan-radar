@@ -46,14 +46,22 @@ Declarations and parameter defaults: [phase_shift_beamformer_op.hpp](phase_shift
 | --- | --- | --- | --- | --- |
 | `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `array_geometry` | `ArrayGeometry` | none (required; empty fails `validate`) | `[live]` Exact wire-schema override | Virtual/physical element positions + wavelength. `num_elements` must match `rd_maps` channels. Cost: Rebuilds cached steering weights. |
-| `angle_convention` | `AngleConvention` | `radar_boresight` | static | How `az_coordinates` / `el_coordinates` and the output beam axes map to unit vectors, or `direction_cosine` for `(u, v)`. Cost: Rebuilds weights (part of the cache key). |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static | How `az_coordinates` / `el_coordinates` and the output beam axes map to unit vectors, or `direction_cosine` for `(u, v)`. Cost: Rebuilds weights. |
 | `az_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine`. Cost: Rebuilds weights. |
 | `el_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`. Cost: Rebuilds weights. |
 | `array_taper` | `WindowSpec` | `WindowType::kNone` (rectangular) | `[live]` Exact wire-schema override | Amplitude taper across elements. Cost: Rebuilds weights. |
 
 ## Algorithm
 
-The shell (`phase_shift_beamformer_op.cu`) receives and validates the rank-3 cube, resolves the four live values into a tick-local `PhaseShiftBeamformerStageConfig`, and builds a `PhaseShiftBeamformerStagePlan` with captured-extent checks and output geometry. It then obtains the runtime stream and fetches conjugated steering weights plus device-resident effective grids from one `ConfigCache`. The required cube is prepared first; active grid sidebands are published before the cube so downstream Exact joins see the axes for that activation. Weights are built on device (`build_steering_weights_device`) as `(num_beams, num_channels)` with `BeamOrder::kAzMajor` (`beam = ia * num_el + ie`), `SteeringLayout::kBeamMajor`, `conjugate = true`. The stage is one broadcast complex GEMM (`phase_shift_beamformer_stage.hpp`):
+The shell (`phase_shift_beamformer_op.cu`) receives and validates the rank-3 cube, resolves the four
+live values into a tick-local `PhaseShiftBeamformerStageConfig`, and builds a
+`PhaseShiftBeamformerStagePlan` with captured-extent checks and output geometry. It then obtains the
+runtime stream and fetches conjugated steering weights plus device-resident effective grids from one
+`ConfigCache`. The required cube is prepared first; active grid sidebands are published before the
+cube so downstream Exact joins see the axes for that activation. Weights are built on device
+(`build_steering_weights_device`) as `(num_beams, num_channels)` with `BeamOrder::kAzMajor` (`beam =
+ia * num_el + ie`), `SteeringLayout::kBeamMajor`, `conjugate = true`. The stage is one broadcast
+complex GEMM (`phase_shift_beamformer_stage.hpp`):
 
 ```text
 Y[b, beam, n] = Σ_c Wᶜ[beam, c] · X[b, c, n]

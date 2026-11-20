@@ -155,8 +155,9 @@ graph.add_flow(grid_source->el_grid, feat->el_grid, q);
 The grid source publishes the same values configured on the beamformer.
 `PhaseShiftBeamformerOp.az_coordinates` / `el_coordinates` are `[live]`
 inputs; its `az_grid` / `el_grid` outputs expose the effective values for a
-tick-coherent connection. An application that already resolves row-aligned `aoa_estimates` may
-instead use `az_estimate` / `el_estimate`, as the current dense demo does.
+tick-coherent connection, as used by the current dense demo. An application
+that already resolves row-aligned `aoa_estimates` may instead use
+`az_estimate` / `el_estimate`.
 
 ### Raw RD bins (no physical axes)
 
@@ -221,7 +222,7 @@ set a device error flag; the host maps it after a stream sync **before**
 
 - **`points`.** `num_points` = `detection_idx` rows (0 is legal → `(0, num_features)`). `num_features` = `features.size()`.
 - **`detection_idx`.** Rank 2, at least 2 columns. Extra columns are preserved-batch indices. Extra leading axes fail closed in `parse_detection_idx_layout`. Dense physical and raw angle-bin tokens require `n_preserved >= 2`.
-- **Selected sources.** `range`, `velocity`, `score`, `az`/`el`, `az_bin`, and `el_bin` require `range_bins`, `velocity_bins`, `detection_score`, `aoa_estimates`, `az_grid`, and `el_grid`, respectively. Duplicate columns share one source port.
+- **Selected sources.** `range`, `velocity`, and `score` require `range_bins`, `velocity_bins`, and `detection_score`, respectively. `az` and `el` require `az_grid` and `el_grid`; `az_estimate` and `el_estimate` require row-aligned `aoa_estimates`. Raw `*_bin` tokens read `detection_idx` and need no axis/grid input. Duplicate columns share one source port.
 - **`detection_score` leading rank** must equal `n_preserved` when `score` is gathered (`FeatureAssemblyOp: detection_score leading rank must match detection_idx preserved batch columns`). Preserved rank is capped at `kMaxPreservedBatchDims` (8). Those leading axes are named CFAR leftovers (NCI-preserved or dense `az`/`el` bins), not a module batch axis.
 - **Precision.** Template `T ∈ {float, double}`. Bin axes, score, AoA, and scan-coordinate grids must be real `T`. `detection_idx` is int64.
 - **Named leading / batch.** No opaque leading batch on `points` or `detection_idx`. Tick row count may grow up to `MaxTensorExtents.max_points`.

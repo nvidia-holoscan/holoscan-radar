@@ -40,6 +40,11 @@ Declarations and parameter defaults: [fmcw_doppler_processor_op.hpp](fmcw_dopple
 | Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
 | `extents` | `MaxTensorExtents` | `max_chirps` and `max_range_bins` required; channel/TX bounds optional | Sizes Tensor pools and bounded workspaces before `arm()`. |
 
+When the Doppler FFT is zero-padded beyond `max_chirps`, also set
+`MaxTensorExtents.max_doppler_bins` to cover the largest output Doppler axis.
+If omitted, that pool bound defaults to `max_chirps`; increasing `nfft` or
+`nfft_doppler` alone does not enlarge the output pool.
+
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |

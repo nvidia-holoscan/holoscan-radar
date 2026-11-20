@@ -19,12 +19,16 @@ Declarations and parameter defaults: [aperture_manager_op.hpp](aperture_manager_
 
 `T=float` means complex64/float32; `T=double` means complex128/float64.
 
-A second parameter sets the geometry precision: `ApertureManagerOp<T, TGeom>`
-defaults `TGeom` to `T`, and the geometry ports take `TGeom` while the retained
-pulses take `T`. `<float, double>` halves the retained aperture while
-keeping positions in float64, which they need: ECEF coordinates do not survive
-float32, where one ulp at a 6.4e6 m radius is 0.76 m -- some 25 wavelengths at
-X band. `weight` stays on `T`: it is a per-pulse amplitude taper, not geometry. `TGeom` may not be coarser than `T`.
+A second template parameter sets geometry precision:
+`ApertureManagerOp<T, TGeom>` defaults `TGeom` to `T`. Position, reference,
+and sample-point tensors use `TGeom`; retained profiles and amplitude
+`weight` use `T`.
+
+`<float, double>` halves retained sample storage compared with
+`<double, double>` while keeping ECEF geometry in float64. At a coordinate
+magnitude of 6.4e6 m, adjacent float32 values are 0.5 m apart, many wavelengths
+at X band. `TGeom` may not be coarser than `T`.
+
 The four required inputs join with `Exact{}` at the same capture time.
 Optional `[live]` inputs also use same-tick `Exact{}`/`SafeDefault{}`.
 
@@ -38,7 +42,7 @@ Optional `[live]` inputs also use same-tick `Exact{}`/`SafeDefault{}`.
 | In | `sample_points` | real `TGeom` | `(num_v,num_u,3)` | Optional `[live]` | staged points |
 | In | `control` | `uint8` Tensor | `(1)` | Optional `[live]` | formation request |
 | In | `evict` | `uint32` Tensor | scalar | Optional `[live]` | pulse count |
-| Out | `range_profiles_out` | complex `T` | `(num_output_pulses,num_range_bins)` | Managed additions/departures or replay | Phase-rotated profiles |
+| Out | `range_profiles_out` | complex `T` | `(num_output_pulses,num_range_bins)` | Managed additions/departures or replay | Managed profiles in output membership order |
 | Out | `positions_out` | real `TGeom` | `(num_output_pulses,3)` | Aligned with output profiles | Managed antenna positions |
 | Out | `reference_position_out` | real `TGeom` | `(num_output_pulses,3)` | Aligned with output profiles | Managed scene reference points |
 | Out | `weight` | real `T` | `(num_output_pulses)` | Optional, latched | signed contribution |
@@ -51,9 +55,25 @@ Optional `[live]` inputs also use same-tick `Exact{}`/`SafeDefault{}`.
 | Item | Type | Requirement | Responsibility |
 | --- | --- | --- | --- |
 | Operator | `ApertureManagerOp` | Add to an HSDK 5 Graph | Own the named ports and Params |
-| Tensor pool | `MaxTensorExtents` | Capture at `graph.op()` | Bound fat output tensors before arm |
+| Tensor pool | `MaxTensorExtents` | Positive `max_pulses`, `max_range_bins`, `max_image_v`, and `max_image_u` | Bound fat output tensors before arm |
 
-Set `max_pulses` for the **largest managed output batch**, including arrivals plus evictions or a retained replay, and `max_range_bins` for the profiles. The bound is captured at `graph.op()` before arm.
+Set `max_pulses` for the **largest managed output batch**, including arrivals
+plus evictions or a retained replay, and `max_range_bins` for the profiles.
+`max_image_v` and `max_image_u` bound `sample_points_out` and are required
+during setup even when that output is unwired. All four bounds are captured
+at `graph.op()` before arm. For example, a graph with at most 2048 managed
+pulses, 4096 range bins, and a 512-by-512 points grid can use:
+
+```cpp
+MaxTensorExtents extents{.max_pulses = 2048,
+                         .max_image_u = 512,
+                         .max_image_v = 512,
+                         .max_range_bins = 4096};
+auto manager = graph.op<ApertureManagerOp<float, double>>("aperture_manager", extents);
+```
+
+Size these values from the application's actual maximum output and image
+extents; this is a construction fragment for an existing Graph.
 
 ## Parameters
 

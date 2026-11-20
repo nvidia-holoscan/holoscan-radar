@@ -20,14 +20,14 @@ Declarations and parameter defaults: [cphd_reader_op.hpp](cphd_reader_op.hpp). B
 There are no input ports: this is a clock-triggered source. `T=float` means
 complex64/float32; `T=double` means complex128/float64.
 
-A second parameter sets the geometry precision: `CPHDReaderOp<T, TGeom>`
-defaults `TGeom` to `T`, and `positions`, `reference_position` and
-`velocities` take `TGeom` while the phase history takes `T`. `<float, double>` keeps ECEF geometry in float64 while
-keeping positions in float64, which they need: ECEF coordinates do not survive
-float32, where one ulp at a 6.4e6 m radius is 0.76 m -- some 25 wavelengths at
-X band. `sample_axis` stays on `T` because it belongs to the fast-time sample data,
-and `pulse_times` was already float64 regardless of `T` -- the same reasoning,
-conceded earlier for one field. `TGeom` may not be coarser than `T`.
+A second template parameter sets geometry precision:
+`CPHDReaderOp<T, TGeom>` defaults `TGeom` to `T`. `positions`,
+`reference_position`, and `velocities` use `TGeom`; phase history and
+`sample_axis` use `T`. `pulse_times` is always float64.
+
+`<float, double>` keeps ECEF geometry in float64 while using single-precision
+samples. At a coordinate magnitude of 6.4e6 m, adjacent float32 values are
+0.5 m apart, many wavelengths at X band. `TGeom` may not be coarser than `T`.
 
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
 | --- | --- | --- | --- | --- | --- |
@@ -55,7 +55,7 @@ conceded earlier for one field. `TGeom` may not be coarser than `T`.
 | --- | --- | --- | --- | --- |
 | `path` | `CollectionPaths` | required | Static | CPHD file, directory, or ordered list |
 | `coordinate_frame` | `CoordinateFrame` | required | Static | Validate position frame |
-| `pulses_per_tick` | `int64` | required | Static | Pulse batch limit |
+| `pulses_per_tick` | `int64` | 1 | Static | Pulse batch limit |
 | `channel` | `int64` | 0 | Static | Selected CPHD channel |
 | `pulse_range` | `vector<int64>` | empty | Static | Half-open per-file selection |
 | `loop` | `bool` | false | Static | Repeat the file list |
@@ -123,7 +123,7 @@ joins it, and `kRelease` releases storage and the sender. The lag HUD
 is live target versus wall (`TxTime` span / `playback_rate` versus now since
 the collection start), matching the HSDK 4 `playback_status()` poll. Pacing uses that same slack (no delay while behind). A paced reader
 (`playback_rate > 0`) also WARNs at most once per second while behind by
-0.2 s or more (the Gantt lag-band entry), and stops once behind is back to
+0.2 s or more, and stops once behind is back to
 0.05 s. The WARN prints `target` (paced transmit time) and wall so behind is
 `wall − target`. Unpaced `playback_rate: 0` does not warn. Per-batch
 collect/wall/slack and per-callback duration are DEBUG
@@ -152,7 +152,10 @@ emit a separate empty EOS tick. HSDK `request_stop` does not drain queued
 samples, so the application owns downstream D22 `EmitAndReset` drain.
 The SAR driver waits for the closing image at or after the last reader
 capture stamp to reach reporting, including the final slice of a batch. Finite (non-loop)
-SAR apps request session stop after the formed image and `visualize_hold_s`.
+SAR apps drain the closing image and apply the configured interactive
+`app.visualization.final_image_hold_s`: zero finishes, a positive value holds
+for that duration, and a negative value waits for closure or interruption.
+Headless and visualization-disabled runs do not hold.
 
 ## Validation and failure cases
 

@@ -7,7 +7,7 @@ TDM front-of-chain marshaling: gather an interleaved slow-time ADC cube into an 
 ## Responsibilities
 
 - Validates a uniform TDM transmit schedule and gathers packed chirps into explicit transmitter, receiver, chirp, and sample axes.
-- Owns schedule-index caching, output sizing, and tick-local schedule overrides.
+- Owns schedule-index caching and output sizing for the static transmit schedule.
 - Does not compensate inter-transmitter phase, process DDM codes, or support staggered/non-uniform timing.
 
 ## When to use
@@ -46,7 +46,7 @@ The operator is data marshaling only. `compute()` is a thin Holoscan shell; tick
 
 Trailing rank is `(N_rx, M·L, samples)`, not an FMCW `(chirps, bins)` cube, so the plan builder uses `parse_adc_cube_layout` instead of `collapse_named_tx_rx_batch`. Rank must be exactly 3.
 
-**Schedule expansion.** `TXSchedule` describes how the interleaved `M·L` slow-time axis splits. `num_tx` is M. Empty `tx_order` means round-robin `[0, 1, …, M−1]`; a nonempty `tx_order` is a permutation of that set and is the firing cycle. Optional `chirp_tx_index` (length `M·L`) overrides `tx_order` when present. The cycle repeats `L` times. Expansion lives in `TXSchedule::expand_chirp_tx_index` (`operators/common/radar_common/descriptors/tx_schedule.cpp`). Pass the same `TXSchedule` to `TDMDenseCompensationOp / DDMDenseDemultiplexOp` so TDM phase uses firing slot, not TX id (`firing_slot_by_tx()`).
+**Schedule expansion.** `TXSchedule` describes how the interleaved `M·L` slow-time axis splits. `num_tx` is M. Empty `tx_order` means round-robin `[0, 1, …, M−1]`; a nonempty `tx_order` is a permutation of that set and is the firing cycle. Optional `chirp_tx_index` (length `M·L`) overrides `tx_order` when present. The cycle repeats `L` times. Expansion lives in `TXSchedule::expand_chirp_tx_index` (`operators/common/radar_common/descriptors/tx_schedule.cpp`). Pass the same `TXSchedule` to `TDMDenseCompensationOp / TDMSparseCompensationOp` so TDM phase uses firing slot, not TX id (`firing_slot_by_tx()`).
 
 **Uniformity (v1 scope).** First-wave TDM assumes uniform per-TX spacing. After expansion, the pattern must be a length-M cycle that repeats identically across all `L` repetitions, and each TX must appear exactly `chirps_per_tx = slow_time / num_tx` times. Custom permutations of `[0, …, M−1]` are allowed when they still repeat uniformly. Non-uniform / staggered schedules are rejected with `"TXSchedule: non-uniform / non-repeating schedule is rejected for first-wave TDM"` (or `"TXSchedule: each TX must appear exactly chirps_per_tx times"`). Staggered TDM is not supported.
 
@@ -118,4 +118,4 @@ graph.add_flow(source->adc_cube, deinterleave->adc_cube, q);
 graph.add_flow(deinterleave->adc_cube_out, range->adc_cube, q);
 ```
 
-`extents` must fill `max_tx`, `max_rx`, `max_chirps` (per-TX `L`), and `max_samples_per_chirp`. Device Tensor producers also need `CompileOptions.deployment.bind_tensor_output_device` on `"adc_cube_out"`. Set downstream `waveform.chirp_repetition_interval` to the per-TX effective PRI (`M ×` physical spacing). Copy the same `tx_schedule` onto `TDMDenseCompensationOp / DDMDenseDemultiplexOp` under TDM.
+`extents` must fill `max_tx`, `max_rx`, `max_chirps` (per-TX `L`), and `max_samples_per_chirp`. Device Tensor producers also need `CompileOptions.deployment.bind_tensor_output_device` on `"adc_cube_out"`. Set downstream `waveform.chirp_repetition_interval` to the per-TX effective PRI (`M ×` physical spacing). Copy the same `tx_schedule` onto `TDMDenseCompensationOp / TDMSparseCompensationOp` under TDM.

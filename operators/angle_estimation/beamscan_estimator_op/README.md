@@ -51,7 +51,7 @@ Declarations and parameter defaults: [beamscan_estimator_op.hpp](beamscan_estima
 | `az_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine`. Cost: Rebuilds weights. |
 | `el_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`; `[0]` gives a 1-D scan. Cost: Rebuilds weights. |
 | `array_taper` | `WindowSpec` | `kNone` (rectangular) | `[live]` Exact wire-schema override | Spatial amplitude taper; non-custom windows are separable on recognized filled URAs, while custom coefficients stay per-element. Cost: Rebuilds weights. |
-| `peak_interpolation` | `PeakInterpolation` | `none` | `[live]` Exact | `none` = argmax cell; `parabolic` = quadratic refinement (2-D interior peaks only). Cost: Free — no weight rebuild. |
+| `peak_interpolation` | `PeakInterpolation` | `none` | `[live]` Exact | `none` = argmax cell; `parabolic` = quadratic refinement on each axis with at least three coordinates and an interior peak. Cost: Free — no weight rebuild. |
 
 ## Algorithm
 

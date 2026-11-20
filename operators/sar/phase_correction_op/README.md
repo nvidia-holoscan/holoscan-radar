@@ -66,7 +66,8 @@ phase_correction:
 ```
 
 Connect a pulse-aligned phase estimator upstream and the corrected profiles
-to a subsequent formation graph. None of the five shipped SAR apps currently
-uses this optional autofocus bridge. The C++ tests assert both sign choices
+to a subsequent formation graph. The [autofocus application](../../../applications/sar/autofocus/README.md)
+resamples the estimate to the retained pulse count and uses this bridge before
+final backprojection. The C++ tests assert both sign choices
 against an analytic phase rotation and check shape errors. See the
 [shared architecture](../../../docs/ARCHITECTURE.md).

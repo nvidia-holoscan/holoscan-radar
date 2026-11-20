@@ -59,7 +59,7 @@ Custom CUDA (no MatX expression); CUB exclusive-sum densifies component roots.
 The normalized neighborhood test is:
 
 ```text
-q is a neighbor of p when Σ_a ((p_a − q_a) · eps_inv2_a) ≤ 1
+q is a neighbor of p when Σ_a ((p_a − q_a)² · eps_inv2_a) ≤ 1
 where eps_inv2_a = epsilon_a > 0 ? 1 / epsilon_a² : 0
 ```
 
@@ -97,9 +97,8 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
   | `num_features < 1` | `ClusterDBSCANOp: num_features must be >= 1` |
   | Empty `epsilon` | `ClusterDBSCANOp: epsilon is required` |
   | `epsilon` length not 1 and not `num_features` | `ClusterDBSCANOp: epsilon must be a scalar (length 1) or match num_features` |
-
-| Non-finite or negative entry | `ClusterDBSCANOp: epsilon values must be finite and >= 0` |
-| Scalar zero or all-zero vector | `ClusterDBSCANOp: epsilon must select at least one active feature` |
+  | Non-finite or negative entry | `ClusterDBSCANOp: epsilon values must be finite and >= 0` |
+  | Scalar zero or all-zero vector | `ClusterDBSCANOp: epsilon must select at least one active feature` |
   | `epsilon` override with no `max_features` | `ClusterDBSCANOp: MaxTensorExtents.max_features must be positive to accept an epsilon override` |
   | `num_points > INT_MAX` | `ClusterDBSCANOp: num_points exceeds the supported range` |
   | `num_points > max_points` | `ClusterDBSCANOp: num_points N exceeds MaxTensorExtents.max_points M` |
