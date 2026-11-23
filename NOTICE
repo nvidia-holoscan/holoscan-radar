@@ -3,7 +3,7 @@ Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 This product includes software developed at NVIDIA CORPORATION (https://www.nvidia.com/).
 
-Holoscan Radar uses the following open source software. None of these components are vendored in this repository. Versions are those recorded for Holoscan SDK 5; this module builds against the copies provided by the SDK.
+Holoscan Radar uses the following open source software. None of these components are vendored in this repository. Versions match Holoscan SDK 5 unless an entry notes a system or toolkit package.
 
 MatX (https://github.com/NVIDIA/MatX)
 Copyright (c) 2021, NVIDIA Corporation
@@ -23,27 +23,28 @@ Statically linked into the Python extension module (holoscan_radar wheel only). 
 fmt (https://github.com/fmtlib/fmt)
 Copyright (c) 2012 - present, Victor Zverovich and {fmt} contributors
 Licensed under MIT (https://github.com/fmtlib/fmt/blob/12.2.0/LICENSE)
-Header templates reached through the Holoscan SDK logging macros are compiled into the operator libraries.
+Header templates reached through the Holoscan SDK logging macros are compiled into the operator libraries and the Python extension module.
 
 DLPack (https://github.com/dmlc/dlpack)
+Copyright 2017 by Contributors
 Licensed under Apache-2.0 (https://github.com/dmlc/dlpack/blob/v1.3/LICENSE)
 Compiled against the header provided by the SDK. This package does not redistribute DLPack source or binaries.
 
-yaml-cpp (https://github.com/jbeder/yaml-cpp)
-Copyright (c) 2008-2015 Jesse Beder.
-Licensed under MIT (https://github.com/jbeder/yaml-cpp/blob/yaml-cpp-0.9.0/LICENSE)
-Linked dynamically through the Holoscan SDK. It is not copied into this package.
-
 TinyXML-2 (https://github.com/leethomason/tinyxml2)
-Licensed under Zlib (https://github.com/leethomason/tinyxml2/blob/master/LICENSE.txt)
-CPHDReaderOp links the system shared library (libtinyxml2). It is not copied into this package.
+Licensed under Zlib (https://github.com/leethomason/tinyxml2/blob/10.0.0/LICENSE.txt)
+CPHDReaderOp links the system shared library (libtinyxml2 10.0.0). It is not copied into this package.
+
+X11 client libraries: libX11 and libXrender (https://gitlab.freedesktop.org/xorg/lib)
+Copyright The X.Org Foundation and contributors; libXrender: Copyright (c) 2001,2003 Keith Packard, Copyright (c) 2000 SuSE, Inc.
+Licensed under X.Org MIT-style licenses (https://gitlab.freedesktop.org/xorg/lib/libx11/-/blob/libX11-1.8.7/COPYING, https://gitlab.freedesktop.org/xorg/lib/libxrender/-/blob/libXrender-0.9.10/COPYING)
+When built with X11 image presentation support, the Python extension module links the system shared libraries (libX11, libXrender). They are not copied into this package.
 
 CUDA Toolkit (https://developer.nvidia.com/cuda-toolkit)
 Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 Distributed under the NVIDIA CUDA Toolkit End User License Agreement (https://docs.nvidia.com/cuda/eula/index.html)
-The Debian package and TGZ contain static operator archives compiled with nvcc; they do not embed the CUDA runtime, cuFFT, or cuSOLVER. The Python extension module links the CUDA runtime, cuFFT, and cuSOLVER dynamically. None of these libraries is copied into this package.
+The operator libraries in the Debian package, TGZ, and wheel are compiled with nvcc, including cuRAND device functions from CUDA headers. In the default shared-library build, the operator libraries link the CUDA runtime, cuFFT, cuSOLVER, and cuBLAS dynamically; static archives (BUILD_SHARED_LIBS=OFF) leave these libraries to the consumer's final link. The Python extension module links the CUDA runtime dynamically. None of these libraries is copied into this package.
 
 GoogleTest (https://github.com/google/googletest)
 Copyright 2008, Google Inc. All rights reserved.
-Licensed under BSD-3-Clause (https://github.com/google/googletest/blob/v1.17.0/LICENSE)
+Licensed under BSD-3-Clause (https://github.com/google/googletest/blob/v1.14.0/LICENSE)
 Used only to build and run unit tests. It is not installed by the holoscan-radar package.
