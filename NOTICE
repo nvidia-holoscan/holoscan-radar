@@ -31,8 +31,9 @@ Licensed under Apache-2.0 (https://github.com/dmlc/dlpack/blob/v1.3/LICENSE)
 Compiled against the header provided by the SDK. This package does not redistribute DLPack source or binaries.
 
 TinyXML-2 (https://github.com/leethomason/tinyxml2)
+Original code by Lee Thomason (www.grinninglizard.com)
 Licensed under Zlib (https://github.com/leethomason/tinyxml2/blob/10.0.0/LICENSE.txt)
-CPHDReaderOp links the system shared library (libtinyxml2 10.0.0). It is not copied into this package.
+CPHDReaderOp links the shared library (libtinyxml2 10.0.0). The Debian package and TGZ use the distribution's copy; the holoscan_radar wheel bundles libtinyxml2.so.10.
 
 X11 client libraries: libX11 and libXrender (https://gitlab.freedesktop.org/xorg/lib)
 Copyright The X.Org Foundation and contributors; libXrender: Copyright (c) 2001,2003 Keith Packard, Copyright (c) 2000 SuSE, Inc.
@@ -48,8 +49,3 @@ GoogleTest (https://github.com/google/googletest)
 Copyright 2008, Google Inc. All rights reserved.
 Licensed under BSD-3-Clause (https://github.com/google/googletest/blob/v1.14.0/LICENSE)
 Used only to build and run unit tests. It is not installed by the holoscan-radar package.
-
-tinyxml2 (https://github.com/leethomason/tinyxml2)
-Original code by Lee Thomason (www.grinninglizard.com)
-Licensed under Zlib (https://github.com/leethomason/tinyxml2/blob/10.0.0/LICENSE.txt)
-The holoscan_radar wheel bundles the shared library (libtinyxml2.so.10) for CPHDReaderOp; the Debian package uses the distribution's copy.
