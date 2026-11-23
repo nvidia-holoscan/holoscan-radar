@@ -33,7 +33,7 @@ def check_library_resolution(package_lib, root, companion_wheels):
             raise RuntimeError(f"{prefix} resolved to {matches}, not a wheel under {root}")
 
 
-def check_installed_wheel(expected_prefix, companion_wheels):
+def check_installed_wheel(expected_prefix):
 
     import holoscan_radar as radar
 
@@ -45,6 +45,8 @@ def check_installed_wheel(expected_prefix, companion_wheels):
         if not location.is_relative_to(root):
             raise RuntimeError(f"Radar import {location} is outside expected prefix {root}")
     package_lib = Path(radar.__file__).resolve().parent / "lib"
+    # A Core wheel in this environment must supply Core and CUDA math libraries too.
+    companion_wheels = Path(hs.__file__).resolve().is_relative_to(root)
     check_library_resolution(package_lib, root, companion_wheels)
     entries = importlib.metadata.distribution("holoscan-radar").entry_points
     if not any(entry.group == "holoscan.modules" and entry.name == "radar" for entry in entries):
@@ -87,8 +89,7 @@ def main():
     args = parser.parse_args()
     if args.sdk_site:
         sys.path.append(str(args.sdk_site.resolve()))
-    # Without an SDK fallback, Core and CUDA math libraries must come from companion wheels.
-    check_installed_wheel(args.expected_prefix, companion_wheels=args.sdk_site is None)
+    check_installed_wheel(args.expected_prefix)
 
 
 if __name__ == "__main__":
