@@ -55,10 +55,10 @@ failure. Each workflow owns independent HUD, counters, and replay support.
 SIGINT/SIGTERM cooperatively stop and join native execution before propagating
 `KeyboardInterrupt`. SDK calls release the GIL while running.
 
-For an installed wheel, set `HOLOHUB_DATA_DIR` at runtime when preset data lives
+For an installed Python build, set `HOLOHUB_DATA_DIR` at runtime when preset data lives
 outside the build machine's data directory. For example, a preset input
 `sar/collection.cphd` resolves to `/datasets/radar/sar/collection.cphd` with
-`HOLOHUB_DATA_DIR=/datasets/radar`. The wheel does not include CPHD collections.
+`HOLOHUB_DATA_DIR=/datasets/radar`. Installed builds do not include CPHD collections.
 An explicit absolute input or `cphd_override` remains supported. Existing input
 files relative to the caller or beside the YAML take precedence over the runtime
 data root; an unset or empty variable retains the compiled fallback.

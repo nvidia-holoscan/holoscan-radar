@@ -95,9 +95,10 @@ To run a Python application:
 
 The Python provider is optional in ordinary C++ builds; see
 [SDK setup](DEVELOPER.md) for SDK components and packaging.
-It exposes all 33 public operators through 68 native registrations under
-`holoscan.radar` and thirteen Python Graph workflows through
-`holoscan_radar.applications`: seven FMCW and six SAR. See the
+It exposes 32 public operators through 67 native registrations under
+`holoscan.radar`. Python-enabled source and container builds also provide
+thirteen Python Graph workflows through `holoscan_radar.applications`: seven
+FMCW and six SAR. The wheel ships the operators only. See the
 [SAR Python guide](applications/sar/README.md#python-applications) for precision
 pairs, input data, visualization, and CLI examples.
 

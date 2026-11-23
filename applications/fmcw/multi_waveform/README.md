@@ -100,7 +100,7 @@ From the repository root, the host CLI builds and runs the colocated
 ./holoscan-radar run multi_waveform smoke --language python
 ```
 
-After building or installing the Python wheel, call the graph directly:
+In a Python-enabled source or container build, call the graph directly:
 
 ```python
 from holoscan.radar.applications.multi_waveform import build_graph

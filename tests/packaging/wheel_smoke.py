@@ -9,8 +9,31 @@ import importlib.util
 import sys
 from pathlib import Path
 
+COMPANION_LIBRARIES = ("libholoscan_core", "libcufft", "libcublas", "libcusolver")
 
-def check_installed_wheel(expected_prefix):
+
+def loaded_libraries():
+    """Return the resolved paths of shared objects mapped into this process."""
+    with open("/proc/self/maps", encoding="utf-8") as maps:
+        fields = (line.split(maxsplit=5) for line in maps)
+        return {Path(f[5].strip()).resolve() for f in fields if len(f) == 6 and ".so" in f[5]}
+
+
+def check_library_resolution(package_lib, root, companion_wheels):
+    loaded = loaded_libraries()
+    for library in sorted(package_lib.glob("*.so*")):
+        matches = {path for path in loaded if path.name == library.name}
+        if matches != {library.resolve()}:
+            raise RuntimeError(f"{library.name} resolved to {sorted(matches)}, not {library}")
+    if not companion_wheels:
+        return
+    for prefix in COMPANION_LIBRARIES:
+        matches = [path for path in loaded if path.name.startswith(prefix + ".so")]
+        if not matches or not all(path.is_relative_to(root) for path in matches):
+            raise RuntimeError(f"{prefix} resolved to {matches}, not a wheel under {root}")
+
+
+def check_installed_wheel(expected_prefix, companion_wheels):
 
     import holoscan_radar as radar
 
@@ -21,6 +44,8 @@ def check_installed_wheel(expected_prefix):
         location = Path(module.__file__).resolve()
         if not location.is_relative_to(root):
             raise RuntimeError(f"Radar import {location} is outside expected prefix {root}")
+    package_lib = Path(radar.__file__).resolve().parent / "lib"
+    check_library_resolution(package_lib, root, companion_wheels)
     entries = importlib.metadata.distribution("holoscan-radar").entry_points
     if not any(entry.group == "holoscan.modules" and entry.name == "radar" for entry in entries):
         raise RuntimeError("Installed wheel is missing the Radar provider entry point")
@@ -41,7 +66,11 @@ def check_installed_wheel(expected_prefix):
         raise RuntimeError("Installed wheel unexpectedly registers TensorDumpOp")
     if importlib.util.find_spec("holoscan_radar.applications") is not None:
         raise RuntimeError("Installed wheel unexpectedly contains holoscan_radar.applications")
-    print("Installed wheel import, provider discovery, and Graph authoring passed")
+    source = "companion wheels" if companion_wheels else "the SDK installation"
+    print(
+        f"Installed wheel import, provider discovery, and Graph authoring passed; "
+        f"Radar libraries resolved from the wheel and Core/CUDA from {source}"
+    )
 
 
 def main():
@@ -58,7 +87,8 @@ def main():
     args = parser.parse_args()
     if args.sdk_site:
         sys.path.append(str(args.sdk_site.resolve()))
-    check_installed_wheel(args.expected_prefix)
+    # Without an SDK fallback, Core and CUDA math libraries must come from companion wheels.
+    check_installed_wheel(args.expected_prefix, companion_wheels=args.sdk_site is None)
 
 
 if __name__ == "__main__":

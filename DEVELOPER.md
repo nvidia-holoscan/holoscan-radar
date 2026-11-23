@@ -292,7 +292,7 @@ ctest --test-dir build-python -R pytest_provider --output-on-failure
 
 The thirteen Python Graph sources are colocated at
 `applications/{fmcw,sar}/<app>/python/<app>.py`; CMake stages them under
-`holoscan_radar.applications` for source builds and wheels. The provider
+`holoscan_radar.applications` for source and container builds; the wheel omits them. The provider
 registers the 32 public operators, including SAR precision pairs, under
 `holoscan.radar`. The `TensorDumpOp` debugging tap is C++-only; the SAR graph
 runtime still uses it for `dump: true` in Python SAR apps. Python-enabled test builds

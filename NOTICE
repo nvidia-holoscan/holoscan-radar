@@ -42,7 +42,7 @@ When built with X11 image presentation support, the Python extension module link
 CUDA Toolkit (https://developer.nvidia.com/cuda-toolkit)
 Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 Distributed under the NVIDIA CUDA Toolkit End User License Agreement (https://docs.nvidia.com/cuda/eula/index.html)
-The operator libraries in the Debian package, TGZ, and wheel are compiled with nvcc, including cuRAND device functions from CUDA headers. In the default shared-library build, the operator libraries link the CUDA runtime, cuFFT, cuSOLVER, and cuBLAS dynamically; static archives (BUILD_SHARED_LIBS=OFF) leave these libraries to the consumer's final link. The Python extension module links the CUDA runtime dynamically. None of these libraries is copied into this package.
+The operator libraries in the Debian package, TGZ, and wheel are compiled with nvcc, including cuRAND device functions from CUDA headers. In the default shared-library build, the operator libraries link the CUDA runtime, cuFFT, cuSOLVER, and cuBLAS dynamically; static archives (BUILD_SHARED_LIBS=OFF) leave these libraries to the consumer's final link. The Python extension module links the CUDA runtime dynamically. None of these CUDA libraries is copied into the Debian package, TGZ, or wheel.
 
 GoogleTest (https://github.com/google/googletest)
 Copyright 2008, Google Inc. All rights reserved.

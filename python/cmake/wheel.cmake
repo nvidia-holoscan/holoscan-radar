@@ -12,8 +12,12 @@ if(NOT COMMAND holoscan_add_python_wheel_component)
     endif()
     return()
 endif()
-if(SKBUILD AND _radar_python_apps)
-    message(FATAL_ERROR "Radar wheels contain operators only; select no APP_<name> applications")
+# App support links libraries outside the component, such as tensor_dump_op.
+if(_radar_python_apps)
+    if(SKBUILD)
+        message(FATAL_ERROR "Radar wheels contain operators only; select no APP_<name> applications")
+    endif()
+    return()
 endif()
 
 # The helper does not follow link dependencies, so list every owned runtime:
