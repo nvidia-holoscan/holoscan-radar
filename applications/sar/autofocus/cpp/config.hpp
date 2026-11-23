@@ -26,7 +26,7 @@
 #include <holoscan/logger/logger.hpp>
 
 #include "error_profile.hpp"  // NOLINT(build/include_subdir)
-#include "io/cphd_reader_op/cphd_file.hpp"
+#include <holoscan/radar/io/cphd_file.hpp>
 #include "radar_app/sar/config.hpp"
 #include "radar_common/sar/geodesy.hpp"
 #include "radar_common/descriptors/enums.hpp"

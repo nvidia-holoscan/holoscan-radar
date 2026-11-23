@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "io/cphd_reader_op/cphd_reader_op.hpp"
+#include <holoscan/radar/io/cphd_reader_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

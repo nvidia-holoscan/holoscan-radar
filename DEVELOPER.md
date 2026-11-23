@@ -478,6 +478,13 @@ find_package(holoscan-radar CONFIG REQUIRED)
 target_link_libraries(my_app PRIVATE holoscan::fmcw_range_processor_op)
 ```
 
+Use `<holoscan/radar/<group>/<operator>.hpp>` for operator declarations and
+`<holoscan/radar/<group>/<operator>/params_config.hpp>` when an application
+decodes that operator's parameter block. The CPHD reader also exposes
+`<holoscan/radar/io/cphd_file.hpp>` for host-side collection metadata and
+fixture inspection. These headers are in the development package; application
+helpers and checkout-specific output-path tools are not.
+
 All built public targets share `holoscan_radar_targets.cmake`; individual target
 names are unchanged. Discovery also works with Debian packaging disabled and
 with intentional operator subsets. The package has no feature components.

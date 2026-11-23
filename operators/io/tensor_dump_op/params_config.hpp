@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "io/tensor_dump_op/tensor_dump_op.hpp"
+#include <holoscan/radar/io/tensor_dump_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

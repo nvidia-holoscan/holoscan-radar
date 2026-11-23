@@ -34,11 +34,11 @@
 #include <holoscan/threading/thread_placement.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
-#include "io/cphd_reader_op/cphd_file.hpp"
-#include "io/cphd_reader_op/cphd_reader_op.hpp"
-#include "io/cphd_reader_op/params_config.hpp"
-#include "io/tensor_dump_op/tensor_dump_op.hpp"
-#include "io/tensor_dump_op/output_paths.hpp"
+#include <holoscan/radar/io/cphd_file.hpp>
+#include <holoscan/radar/io/cphd_reader_op.hpp>
+#include <holoscan/radar/io/cphd_reader_op/params_config.hpp>
+#include <holoscan/radar/io/tensor_dump_op.hpp>
+#include "radar_app/sar/output_paths.hpp"
 #include "radar_app/app/config_utils.hpp"
 #include "radar_app/app/config_loader.hpp"
 #include "radar_app/app/gpu_placement.hpp"
@@ -46,12 +46,12 @@
 #ifdef HOLOSCAN_RADAR_HAS_X11
 #include "radar_app/viz/x11_display.hpp"
 #endif
-#include "sar/aperture_manager_op/aperture_manager_op.hpp"
-#include "sar/aperture_manager_op/params_config.hpp"
-#include "sar/backprojection_op/backprojection_op.hpp"
-#include "sar/backprojection_op/params_config.hpp"
-#include "sar/sar_range_compression_op/sar_range_compression_op.hpp"
-#include "sar/sar_range_compression_op/params_config.hpp"
+#include <holoscan/radar/sar/aperture_manager_op.hpp>
+#include <holoscan/radar/sar/aperture_manager_op/params_config.hpp>
+#include <holoscan/radar/sar/backprojection_op.hpp>
+#include <holoscan/radar/sar/backprojection_op/params_config.hpp>
+#include <holoscan/radar/sar/sar_range_compression_op.hpp>
+#include <holoscan/radar/sar/sar_range_compression_op/params_config.hpp>
 #include "radar_app/sar/config.hpp"
 #include "radar_app/sar/custom_ops.hpp"
 #include "radar_app/sar/diagnostics.hpp"

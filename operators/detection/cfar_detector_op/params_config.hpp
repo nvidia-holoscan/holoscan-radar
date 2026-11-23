@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "detection/cfar_detector_op/cfar_detector_op.hpp"
+#include <holoscan/radar/detection/cfar_detector_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

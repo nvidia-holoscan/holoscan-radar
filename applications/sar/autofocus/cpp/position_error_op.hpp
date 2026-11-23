@@ -40,7 +40,7 @@
 #include <holoscan/logger/logger.hpp>
 
 #include "error_profile.hpp"  // NOLINT(build/include_subdir)
-#include "io/tensor_dump_op/npy_writer.hpp"
+#include <holoscan/radar/io/npy_writer.hpp>
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"

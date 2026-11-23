@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "sar/aperture_manager_op/aperture_manager_op.hpp"
+#include <holoscan/radar/sar/aperture_manager_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

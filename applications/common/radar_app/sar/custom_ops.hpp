@@ -23,7 +23,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
-#include "io/tensor_dump_op/tensor_dump_op.hpp"
+#include <holoscan/radar/io/tensor_dump_op.hpp>
 #include "radar_app/sar/hud_format.hpp"
 #include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/tensor_io.hpp"

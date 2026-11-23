@@ -12,7 +12,7 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/params/config.hpp>
 
-#include "detection/feature_assembly_op/feature_assembly_op.hpp"
+#include <holoscan/radar/detection/feature_assembly_op.hpp>
 #include "radar_app/app/range_loss_config.hpp"
 #include "radar_app/app/scene_visibility_config.hpp"
 #include "radar_app/app/visualization_config.hpp"
