@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["scikit-build-core>=0.10", "nanobind==3.0.1"]
+requires = ["scikit-build-core==1.0.3", "nanobind==3.0.1"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -10,7 +10,8 @@ name = "holoscan-radar"
 version = "1.0.0"
 description = "Accelerated radar signal processing operators for the Holoscan ecosystem"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Holoscan Team" },
 ]
@@ -43,20 +44,20 @@ explicit = true
 
 [tool.scikit-build]
 cmake.version = ">=4.0"
-# Build only what the wheel needs: turn off test and app subprojects, and
-# turn off the deb option (which is build-type-driven, not wheel-driven).
-# The Python option selects all 33 operators and native application helpers,
-# without building application executables.
-cmake.args = [
-    "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
-    "-DBUILD_ALL=OFF",
-    "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
-]
-# Wheel content comes from CMake install rules. Use *relative* DESTINATIONs in
-# install(...) calls — scikit-build-core stages those into the wheel root.
-# Setting wheel.install-dir = "/" would require the experimental flag.
+cmake.build-type = "Release"
+# Wheel content comes only from the holoscan-wheel-radar install component
+# (python/cmake/wheel.cmake): the operators-only holoscan_radar package and the
+# native libraries it owns under holoscan_radar/lib.
 wheel.packages = []
 wheel.py-api = "cp312"
+install.components = ["holoscan-wheel-radar"]
+
+# Build the FMCW and SAR operators the provider registers; no apps or tests.
+[tool.scikit-build.cmake.define]
+BUILD_SHARED_LIBS = true
+BUILD_ALL = false
+HOLOSCAN_RADAR_BUILD_PYTHON = true
+HOLOSCAN_RADAR_BUILD_TESTING = false
 
 [tool.holoscan]
 repo-prefix = "holoscan-radar"
