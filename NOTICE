@@ -37,12 +37,12 @@ CPHDReaderOp links the system shared library (libtinyxml2 10.0.0). It is not cop
 X11 client libraries: libX11 and libXrender (https://gitlab.freedesktop.org/xorg/lib)
 Copyright The X.Org Foundation and contributors; libXrender: Copyright (c) 2001,2003 Keith Packard, Copyright (c) 2000 SuSE, Inc.
 Licensed under X.Org MIT-style licenses (https://gitlab.freedesktop.org/xorg/lib/libx11/-/blob/libX11-1.8.7/COPYING, https://gitlab.freedesktop.org/xorg/lib/libxrender/-/blob/libXrender-0.9.10/COPYING)
-The Python extension module links the system shared libraries (libX11, libXrender) for X11 image presentation. They are not copied into this package.
+When built with X11 image presentation support, the Python extension module links the system shared libraries (libX11, libXrender). They are not copied into this package.
 
 CUDA Toolkit (https://developer.nvidia.com/cuda-toolkit)
 Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 Distributed under the NVIDIA CUDA Toolkit End User License Agreement (https://docs.nvidia.com/cuda/eula/index.html)
-The operator libraries in the Debian package, TGZ, and wheel are compiled with nvcc, including cuRAND device functions from CUDA headers. The operator libraries link the CUDA runtime, cuFFT, cuSOLVER, and cuBLAS dynamically; the Python extension module links the CUDA runtime dynamically. None of these libraries is copied into this package.
+The operator libraries in the Debian package, TGZ, and wheel are compiled with nvcc, including cuRAND device functions from CUDA headers. In the default shared-library build, the operator libraries link the CUDA runtime, cuFFT, cuSOLVER, and cuBLAS dynamically; static archives (BUILD_SHARED_LIBS=OFF) leave these libraries to the consumer's final link. The Python extension module links the CUDA runtime dynamically. None of these libraries is copied into this package.
 
 GoogleTest (https://github.com/google/googletest)
 Copyright 2008, Google Inc. All rights reserved.
