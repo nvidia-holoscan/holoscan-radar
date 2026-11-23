@@ -19,7 +19,16 @@ def loaded_libraries():
         return {Path(f[5].strip()).resolve() for f in fields if len(f) == 6 and ".so" in f[5]}
 
 
-def check_library_resolution(package_lib, root, companion_wheels):
+def installed_distribution_files():
+    """Map each resolved file of an installed distribution to that distribution's name."""
+    owners = {}
+    for distribution in importlib.metadata.distributions():
+        for file in distribution.files or ():
+            owners[Path(distribution.locate_file(file)).resolve()] = distribution.metadata["Name"]
+    return owners
+
+
+def check_library_resolution(package_lib, owners, companion_wheels):
     loaded = loaded_libraries()
     for library in sorted(package_lib.glob("*.so*")):
         matches = {path for path in loaded if path.name == library.name}
@@ -29,8 +38,8 @@ def check_library_resolution(package_lib, root, companion_wheels):
         return
     for prefix in COMPANION_LIBRARIES:
         matches = [path for path in loaded if path.name.startswith(prefix + ".so")]
-        if not matches or not all(path.is_relative_to(root) for path in matches):
-            raise RuntimeError(f"{prefix} resolved to {matches}, not a wheel under {root}")
+        if not matches or not all(path in owners for path in matches):
+            raise RuntimeError(f"{prefix} resolved to {matches}, not an installed wheel")
 
 
 def check_installed_wheel(expected_prefix):
@@ -45,9 +54,11 @@ def check_installed_wheel(expected_prefix):
         if not location.is_relative_to(root):
             raise RuntimeError(f"Radar import {location} is outside expected prefix {root}")
     package_lib = Path(radar.__file__).resolve().parent / "lib"
-    # A Core wheel in this environment must supply Core and CUDA math libraries too.
-    companion_wheels = Path(hs.__file__).resolve().is_relative_to(root)
-    check_library_resolution(package_lib, root, companion_wheels)
+    # When Core comes from its wheel, Core and CUDA math libraries must come from wheels too.
+    owners = installed_distribution_files()
+    core = owners.get(Path(hs.__file__).resolve(), "")
+    companion_wheels = core.lower().startswith("holoscan-core")
+    check_library_resolution(package_lib, owners, companion_wheels)
     entries = importlib.metadata.distribution("holoscan-radar").entry_points
     if not any(entry.group == "holoscan.modules" and entry.name == "radar" for entry in entries):
         raise RuntimeError("Installed wheel is missing the Radar provider entry point")
