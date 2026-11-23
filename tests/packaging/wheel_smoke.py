@@ -20,9 +20,11 @@ def loaded_libraries():
 
 
 def installed_distribution_files():
-    """Map each resolved file of an installed distribution to that distribution's name."""
+    """Map each resolved file of a wheel-installed distribution to that distribution's name."""
     owners = {}
     for distribution in importlib.metadata.distributions():
+        if distribution.read_text("WHEEL") is None:
+            continue
         for file in distribution.files or ():
             owners[Path(distribution.locate_file(file)).resolve()] = distribution.metadata["Name"]
     return owners
