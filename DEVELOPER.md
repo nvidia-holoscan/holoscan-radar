@@ -348,6 +348,13 @@ What it does, and where to change it:
   for a C++-only run. Narrow to one tier with
   `--ctest-options='-DINCLUDE_LABELS=statistical'`, or exclude tiers with
   `-DEXCLUDE_LABELS='statistical|visualization'`.
+- When Python is enabled, runs `ApplicationConfigureMatrix` and
+  `ApplicationCliSisoSmoke`. These check fresh Python application configurations
+  through their manifests, a default build with multiple selected components,
+  and SISO execution while switching from C++ to Python and back in one build
+  tree. Run these checks with `--ctest-options='-DINCLUDE_LABELS=app-build'`.
+  Per-case logs appear in `build-test/Testing/Temporary/`. Direct CMake builds
+  can opt in with `HOLOSCAN_RADAR_TEST_APP_BUILDS=ON` inside the SDK container.
 - Enables `HOLOSCAN_RADAR_TEST_PACKAGING` and runs `Packaging_debian` plus
   `Packaging_wheel` (the latter when Python is enabled). These serial integration
   checks build fresh artifacts through `holoscan package holoscan-radar`

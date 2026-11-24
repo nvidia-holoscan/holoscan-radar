@@ -32,6 +32,19 @@ if(NOT HOLOSCAN_RADAR_BUILD_PYTHON)
     return()
 endif()
 
+if(HOLOSCAN_RADAR_TEST_APP_BUILDS)
+    foreach(_case IN ITEMS ApplicationConfigureMatrix ApplicationCliSisoSmoke)
+        add_test(NAME ${_case}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_app_builds.py
+                ${_case} --source ${PROJECT_SOURCE_DIR}
+                --work ${CMAKE_CURRENT_BINARY_DIR}/app-build
+                --log-dir ${PROJECT_BINARY_DIR}/Testing/Temporary)
+        set_tests_properties(${_case} PROPERTIES LABELS "app-build")
+    endforeach()
+    set_tests_properties(ApplicationConfigureMatrix PROPERTIES TIMEOUT 300)
+    set_tests_properties(ApplicationCliSisoSmoke PROPERTIES RUN_SERIAL TRUE TIMEOUT 1800)
+endif()
+
 find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
 add_test(NAME pytest_provider
     COMMAND ${Python3_EXECUTABLE} -m pytest -q ${PROJECT_SOURCE_DIR}/tests/provider/)

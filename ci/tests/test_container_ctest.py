@@ -30,6 +30,7 @@ class ContainerCTestContract(unittest.TestCase):
                 "project(RadarCIFixture LANGUAGES NONE)",
                 "enable_testing()",
                 'option(HOLOSCAN_RADAR_TEST_PACKAGING "Artifact coverage fixture" OFF)',
+                'option(HOLOSCAN_RADAR_TEST_APP_BUILDS "Application coverage fixture" OFF)',
             ]
             if fail_configure:
                 cmake.append('message(FATAL_ERROR "fixture configure failure")')
@@ -47,6 +48,10 @@ class ContainerCTestContract(unittest.TestCase):
                         "if(HOLOSCAN_RADAR_TEST_PACKAGING)",
                         'add_test(NAME packaging COMMAND "${CMAKE_COMMAND}" -E true)',
                         "set_tests_properties(packaging PROPERTIES LABELS packaging)",
+                        "endif()",
+                        "if(HOLOSCAN_RADAR_TEST_APP_BUILDS AND HOLOSCAN_RADAR_BUILD_PYTHON)",
+                        'add_test(NAME app_build COMMAND "${CMAKE_COMMAND}" -E true)',
+                        'set_tests_properties(app_build PROPERTIES LABELS "app-build")',
                         "endif()",
                     ]
                 )
@@ -75,11 +80,12 @@ class ContainerCTestContract(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
-            set(names), {"unit", "statistical", "integration", "arbitrary", "packaging"}
+            set(names),
+            {"unit", "statistical", "integration", "arbitrary", "packaging", "app_build"},
         )
         for report in reports.values():
             self.assertEqual(ET.fromstring(report).attrib["BuildName"], "radar-linux-main-5x")
-        self.assertIn("CTest coverage: 5 tests", result.stdout)
+        self.assertIn("CTest coverage: 6 tests", result.stdout)
         self.assertIn("-j2", result.stdout)
 
     def test_packaging_coverage_can_be_disabled_explicitly(self):
@@ -87,7 +93,18 @@ class ContainerCTestContract(unittest.TestCase):
             ("-DCONFIGURE_OPTIONS=-DHOLOSCAN_RADAR_TEST_PACKAGING:BOOL=OFF",)
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(set(names), {"unit", "statistical", "integration", "arbitrary"})
+        self.assertEqual(
+            set(names), {"unit", "statistical", "integration", "arbitrary", "app_build"}
+        )
+
+    def test_cpp_only_dashboard_omits_application_build_checks(self):
+        result, _, names = self.run_dashboard(
+            ("-DCONFIGURE_OPTIONS=-DHOLOSCAN_RADAR_BUILD_PYTHON:BOOL=OFF",)
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            set(names), {"unit", "statistical", "integration", "arbitrary", "packaging"}
+        )
 
     def test_local_default_name(self):
         result, reports, _ = self.run_dashboard()
@@ -101,7 +118,11 @@ class ContainerCTestContract(unittest.TestCase):
     def test_explicit_label_filters(self):
         for args, expected in (
             (("-DINCLUDE_LABELS=statistical",), {"statistical"}),
-            (("-DEXCLUDE_LABELS=arbitrary",), {"unit", "statistical", "integration", "packaging"}),
+            (("-DINCLUDE_LABELS=app-build",), {"app_build"}),
+            (
+                ("-DEXCLUDE_LABELS=arbitrary",),
+                {"unit", "statistical", "integration", "packaging", "app_build"},
+            ),
             (("-DINCLUDE_LABELS=unit|arbitrary", "-DEXCLUDE_LABELS=arbitrary"), {"unit"}),
         ):
             with self.subTest(args=args):
@@ -126,7 +147,8 @@ class ContainerCTestContract(unittest.TestCase):
         result, _, names = self.run_dashboard(fail_test=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(
-            set(names), {"unit", "statistical", "integration", "arbitrary", "packaging"}
+            set(names),
+            {"unit", "statistical", "integration", "arbitrary", "packaging", "app_build"},
         )
         self.assertIn("Tests failed with return value", result.stdout + result.stderr)
 
