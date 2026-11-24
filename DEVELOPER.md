@@ -293,9 +293,10 @@ ctest --test-dir build-python -R pytest_provider --output-on-failure
 
 The thirteen Python Graph sources are colocated at
 `applications/{fmcw,sar}/<app>/python/<app>.py`; CMake stages them under
-`holoscan_radar.applications` for source builds and wheels. The provider
-registers all 33 public operators, including SAR precision pairs and the
-dtype-independent dump sink, under `holoscan.radar`. Python-enabled test builds
+`holoscan_radar.applications` for source and container builds; the wheel omits them. The provider
+registers the 32 public operators, including SAR precision pairs, under
+`holoscan.radar`. The `TensorDumpOp` debugging tap is C++-only; the SAR graph
+runtime still uses it for `dump: true` in Python SAR apps. Python-enabled test builds
 also build the six C++ SAR references and generate their CPHD fixtures. CTest
 sets `HOLOSCAN_RADAR_TEST_BUILD_DIR` for provider tests; set it to the absolute
 build directory when invoking pytest directly.
@@ -559,12 +560,12 @@ default to Python off; enable them with `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON`.
 ./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
 ```
 
-The provider covers all 33 public operators: 26 FMCW operators with F32/F64
+The provider covers 32 public operators: 26 FMCW operators with F32/F64
 variants; `SARRangeCompressionOp`, `PhaseCorrectionOp`, and `AutofocusOp` with
 F32/F64 variants; and `CPHDReaderOp`, `ApertureManagerOp`, and `BackprojectionOp`
-with `F32GeomF32`, `F32GeomF64`, and `F64GeomF64` variants. `TensorDumpOp` is a
-single dtype-independent sink without an `extents` argument. Existing FMCW
-imports and call signatures are unchanged.
+with `F32GeomF32`, `F32GeomF64`, and `F64GeomF64` variants. `TensorDumpOp` is
+C++-only; Python SAR apps reach it through the shared graph runtime for
+`dump: true`. Existing FMCW imports and call signatures are unchanged.
 
 All six SAR applications also have Python graphs with the same YAML,
 visualization, dumping, and playback behavior as C++. They default to single

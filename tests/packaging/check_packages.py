@@ -443,7 +443,8 @@ def check_wheel(args):
             raise RuntimeError(f"Wheel metadata missing {name}")
     if any("share/doc/" in entry for entry in names):
         raise RuntimeError("Wheel payload unexpectedly contains package documentation")
-    # Inherit SDK dependencies, but require Radar itself to come from this venv.
+    # Inherit SDK dependencies, but require Radar and its bundled libraries to come from this
+    # venv. Core/CUDA companion-wheel resolution is qualified by a clean dependency install.
     environment = args.work / "venv"
     venv.EnvBuilder(with_pip=True, system_site_packages=True).create(environment)
     python = environment / "bin/python"

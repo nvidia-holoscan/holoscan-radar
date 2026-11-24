@@ -77,6 +77,9 @@ python tests/packaging/wheel_smoke.py --sdk-site /usr/lib/python3.12/site-packag
 Omit `--sdk-site` when the SDK is already importable. The check requires Radar's
 Python facade and native extension to come from the active Python environment;
 `--expected-prefix` can explicitly select a different expected install prefix.
+It also requires the wheel's bundled libraries to load from the wheel. When Core
+is imported from the `holoscan-core` wheel, Core and the CUDA math libraries must
+also load from installed wheels.
 CI calls this same file with Python's `-I` isolation flag after installing the wheel.
 
 ## metadata.json

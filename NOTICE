@@ -31,8 +31,9 @@ Licensed under Apache-2.0 (https://github.com/dmlc/dlpack/blob/v1.3/LICENSE)
 Compiled against the header provided by the SDK. This package does not redistribute DLPack source or binaries.
 
 TinyXML-2 (https://github.com/leethomason/tinyxml2)
+Original code by Lee Thomason (www.grinninglizard.com)
 Licensed under Zlib (https://github.com/leethomason/tinyxml2/blob/10.0.0/LICENSE.txt)
-CPHDReaderOp links the system shared library (libtinyxml2 10.0.0). It is not copied into this package.
+CPHDReaderOp links the shared library (libtinyxml2 10.0.0). The Debian package and TGZ use the distribution's copy; the holoscan_radar wheel bundles libtinyxml2.so.10.
 
 X11 client libraries: libX11 and libXrender (https://gitlab.freedesktop.org/xorg/lib)
 Copyright The X.Org Foundation and contributors; libXrender: Copyright (c) 2001,2003 Keith Packard, Copyright (c) 2000 SuSE, Inc.
@@ -42,7 +43,7 @@ When built with X11 image presentation support, the Python extension module link
 CUDA Toolkit (https://developer.nvidia.com/cuda-toolkit)
 Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 Distributed under the NVIDIA CUDA Toolkit End User License Agreement (https://docs.nvidia.com/cuda/eula/index.html)
-The operator libraries in the Debian package, TGZ, and wheel are compiled with nvcc, including cuRAND device functions from CUDA headers. In the default shared-library build, the operator libraries link the CUDA runtime, cuFFT, cuSOLVER, and cuBLAS dynamically; static archives (BUILD_SHARED_LIBS=OFF) leave these libraries to the consumer's final link. The Python extension module links the CUDA runtime dynamically. None of these libraries is copied into this package.
+The operator libraries in the Debian package, TGZ, and wheel are compiled with nvcc, including cuRAND device functions from CUDA headers. In the default shared-library build, the operator libraries link the CUDA runtime, cuFFT, cuSOLVER, and cuBLAS dynamically; static archives (BUILD_SHARED_LIBS=OFF) leave these libraries to the consumer's final link. The Python extension module links the CUDA runtime dynamically. None of these CUDA libraries is copied into the Debian package, TGZ, or wheel.
 
 GoogleTest (https://github.com/google/googletest)
 Copyright 2008, Google Inc. All rights reserved.

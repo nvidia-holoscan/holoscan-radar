@@ -59,7 +59,7 @@ From the repository root, the host CLI builds and runs the colocated
 ./holoscan-radar run mimo_tdm smoke --language python
 ```
 
-After building or installing the Python wheel, call the graph directly:
+In a Python-enabled source or container build, call the graph directly:
 
 ```python
 from holoscan.radar.applications.mimo_tdm import build_graph

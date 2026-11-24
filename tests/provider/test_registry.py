@@ -21,7 +21,7 @@ def test_facade_stub_matches_public_operators():
         if isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
         and isinstance(node.annotation, ast.Name)
-        and node.annotation.id in {"RadarOperator", "TensorDumpOperator"}
+        and node.annotation.id == "RadarOperator"
     }
     assert declared == set(radar.__all__)
 
@@ -32,7 +32,7 @@ def test_all_public_precisions_are_registered():
         for item in hs.registry.operators()
         if item.name.startswith("holoscan.radar.") and "._app." not in item.name
     }
-    assert len(registered) == 68
+    assert len(registered) == 67
     assert registered == {f"holoscan.radar.{name}" for name in radar.__all__}
     assert "holoscan.radar.SubarraySelectionOpF32" in registered
     assert "holoscan.radar.SubarraySelectionOpF64" in registered
@@ -67,10 +67,7 @@ def test_public_facade_constructs_both_precisions(name):
     }
     graph = hs.Graph(name)
     params = {"features": ["range"]} if name.startswith("FeatureAssembly") else {}
-    if name == "TensorDumpOp":
-        handle = radar.TensorDumpOp(graph, "operator", path="unused.npy")
-    else:
-        handle = getattr(radar, name)(graph, "operator", extents=extents, **params)
+    handle = getattr(radar, name)(graph, "operator", extents=extents, **params)
     assert handle.name == "operator"
 
 
