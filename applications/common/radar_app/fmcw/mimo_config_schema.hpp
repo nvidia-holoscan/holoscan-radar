@@ -15,11 +15,11 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/params/config.hpp>
 
-#include "detection/feature_assembly_op/feature_assembly_op.hpp"
-#include "fmcw/ddm_dense_demultiplex_op/ddm_dense_demultiplex_op.hpp"
-#include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
-#include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
-#include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
+#include <holoscan/radar/detection/feature_assembly_op.hpp>
+#include <holoscan/radar/fmcw/ddm_dense_demultiplex_op.hpp>
+#include <holoscan/radar/fmcw/mimo_deinterleave_op.hpp>
+#include <holoscan/radar/fmcw/tdm_sparse_compensation_op.hpp>
+#include <holoscan/radar/fmcw/virtual_array_assembly_op.hpp>
 #include "radar_app/app/range_loss_config.hpp"
 #include "radar_app/app/scene_visibility_config.hpp"
 #include "radar_app/app/visualization_config.hpp"

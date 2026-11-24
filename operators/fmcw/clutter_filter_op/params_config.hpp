@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
+#include <holoscan/radar/fmcw/clutter_filter_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

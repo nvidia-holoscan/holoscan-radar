@@ -140,8 +140,11 @@ endif()
 # time option() is encountered, so the FORCE has to happen before then.
 
 add_subdirectory(pkg)
+include(HoloscanRadarPublicHeaders)
+holoscan_radar_stage_public_headers()
 add_subdirectory(applications)
 add_subdirectory(operators)
+holoscan_radar_install_app_codecs()
 
 if(HOLOSCAN_RADAR_BUILD_TESTING)
     enable_testing()

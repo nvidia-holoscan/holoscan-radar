@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include <holoscan/radar/detection/detection_reduction_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

@@ -13,6 +13,12 @@ library directory, matching the Holoscan SDK 5 Debian packages:
 /usr/lib/<triplet>/cmake/holoscan-radar/...
 ```
 
+The development package installs operator declarations at
+`holoscan/radar/<group>/<operator>.hpp`, app-facing parameter codecs at
+`holoscan/radar/<group>/<operator>/params_config.hpp`, and the host-side CPHD
+metadata parser at `holoscan/radar/io/cphd_file.hpp`. Only selected operators'
+codecs are installed in an intentional subset build.
+
 `<triplet>` is the target's multiarch name, such as `x86_64-linux-gnu` or
 `aarch64-linux-gnu`. This applies to a plain `cmake --install`, the DEB, and
 the TGZ, whose entries keep the `usr/...` install paths. CMake selects the

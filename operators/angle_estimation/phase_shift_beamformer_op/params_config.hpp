@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "angle_estimation/phase_shift_beamformer_op/phase_shift_beamformer_op.hpp"
+#include <holoscan/radar/angle_estimation/phase_shift_beamformer_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "angle_estimation/snapshot_gather_op/snapshot_gather_op.hpp"
+#include <holoscan/radar/angle_estimation/snapshot_gather_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

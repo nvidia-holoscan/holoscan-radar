@@ -21,8 +21,8 @@
 #include "phase_resample_op.hpp"    // NOLINT(build/include_subdir)
 #include "position_error_op.hpp"    // NOLINT(build/include_subdir)
 #include "sharpness_report_op.hpp"  // NOLINT(build/include_subdir)
-#include "sar/autofocus_op/autofocus_op.hpp"
-#include "sar/phase_correction_op/phase_correction_op.hpp"
+#include <holoscan/radar/sar/autofocus_op.hpp>
+#include <holoscan/radar/sar/phase_correction_op.hpp>
 
 namespace app = holoscan::radar::app;
 namespace radar = holoscan::radar;

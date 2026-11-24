@@ -20,15 +20,15 @@
 #include <holoscan/params/config.hpp>
 #include <holoscan/params/error.hpp>
 
-#include "angle_estimation/beamscan_estimator_op/params_config.hpp"
-#include "angle_estimation/phase_shift_beamformer_op/params_config.hpp"
-#include "angle_estimation/snapshot_gather_op/params_config.hpp"
-#include "clustering/cluster_dbscan_op/params_config.hpp"
-#include "detection/cfar_detector_op/params_config.hpp"
-#include "detection/detection_reduction_op/params_config.hpp"
-#include "fmcw/clutter_filter_op/params_config.hpp"
-#include "fmcw/fmcw_doppler_processor_op/params_config.hpp"
-#include "fmcw/fmcw_range_processor_op/params_config.hpp"
+#include <holoscan/radar/angle_estimation/beamscan_estimator_op/params_config.hpp>
+#include <holoscan/radar/angle_estimation/phase_shift_beamformer_op/params_config.hpp>
+#include <holoscan/radar/angle_estimation/snapshot_gather_op/params_config.hpp>
+#include <holoscan/radar/clustering/cluster_dbscan_op/params_config.hpp>
+#include <holoscan/radar/detection/cfar_detector_op/params_config.hpp>
+#include <holoscan/radar/detection/detection_reduction_op/params_config.hpp>
+#include <holoscan/radar/fmcw/clutter_filter_op/params_config.hpp>
+#include <holoscan/radar/fmcw/fmcw_doppler_processor_op/params_config.hpp>
+#include <holoscan/radar/fmcw/fmcw_range_processor_op/params_config.hpp>
 #include "radar_app/app/run_config.hpp"
 #include "radar_app/app/config_utils.hpp"
 #include "radar_app/fmcw/config_loader.hpp"

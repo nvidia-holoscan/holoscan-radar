@@ -52,3 +52,5 @@ install(FILES cphd_reader_op.hpp
 install(FILES collection_paths.hpp host_read_ahead.hpp playback_scheduler.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/io/cphd_reader_op
 )
+install(FILES cphd_file.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/io)

@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
+#include <holoscan/radar/fmcw/fmcw_doppler_processor_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

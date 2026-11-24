@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "sar/backprojection_op/backprojection_op.hpp"
+#include <holoscan/radar/sar/backprojection_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

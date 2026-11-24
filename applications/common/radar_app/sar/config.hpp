@@ -43,7 +43,7 @@
 
 #include <holoscan/config/io.hpp>
 
-#include "io/cphd_reader_op/cphd_file.hpp"
+#include <holoscan/radar/io/cphd_file.hpp>
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/window_spec.hpp"

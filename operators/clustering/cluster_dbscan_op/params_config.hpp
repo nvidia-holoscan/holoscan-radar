@@ -5,7 +5,7 @@
 
 #include <holoscan/params/config.hpp>
 
-#include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
+#include <holoscan/radar/clustering/cluster_dbscan_op.hpp>
 #include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::config {

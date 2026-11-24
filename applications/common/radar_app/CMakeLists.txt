@@ -12,11 +12,16 @@
 # The HSDK 5 dashboard stays optional; report sinks always build.
 add_library(radar_app INTERFACE)
 add_library(holoscan::radar_app ALIAS radar_app)
+if(DEFINED RADAR_SOURCE_ROOT)
+    set(_radar_source_root "${RADAR_SOURCE_ROOT}")
+else()
+    get_filename_component(_radar_source_root "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+endif()
 
 # "radar_app/..." resolves from applications/common; the radar_common include
 # root arrives transitively through holoscan::radar_common below.
 target_include_directories(radar_app INTERFACE
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/applications/common>)
+    $<BUILD_INTERFACE:${_radar_source_root}/applications/common>)
 
 target_link_libraries(radar_app INTERFACE
     holoscan::core
@@ -27,7 +32,7 @@ target_link_libraries(radar_app INTERFACE
 # Cold application device selection is shared by C++, Python and SAR entry points.
 add_library(radar_app_gpu STATIC app/gpu_placement.cpp)
 target_include_directories(radar_app_gpu PUBLIC
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/applications/common>)
+    $<BUILD_INTERFACE:${_radar_source_root}/applications/common>)
 target_link_libraries(radar_app_gpu PUBLIC holoscan::core holoscan::params_io CUDA::cudart)
 set_target_properties(radar_app_gpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
@@ -40,7 +45,7 @@ target_link_libraries(radar_app INTERFACE radar_app_gpu)
 # Generate GUI copy from the canonical C++ manifests; changes reconfigure the build.
 set(_radar_descriptions "#pragma once\n#include <stdexcept>\n#include <string>\n#include <string_view>\nnamespace holoscan::radar::app {\ninline std::string application_description(std::string_view application, std::string_view mode = \"default\") {\n")
 foreach(_radar_app IN ITEMS siso simo dense_beamforming mimo_tdm mimo_ddm adaptive_aoa multi_waveform)
-    set(_radar_manifest "${PROJECT_SOURCE_DIR}/applications/fmcw/${_radar_app}/cpp/metadata.json")
+    set(_radar_manifest "${_radar_source_root}/applications/fmcw/${_radar_app}/cpp/metadata.json")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_radar_manifest}")
     file(READ "${_radar_manifest}" _radar_metadata)
     string(JSON _radar_mode_count LENGTH "${_radar_metadata}" application modes)
@@ -74,7 +79,7 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     add_library(holoscan::fmcw_dashboard ALIAS fmcw_dashboard)
 
     target_include_directories(fmcw_dashboard PUBLIC
-        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/applications/common>)
+        $<BUILD_INTERFACE:${_radar_source_root}/applications/common>)
 
     target_link_libraries(fmcw_dashboard PUBLIC
         holoscan::core

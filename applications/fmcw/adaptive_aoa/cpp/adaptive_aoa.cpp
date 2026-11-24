@@ -9,21 +9,21 @@
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/graph.hpp>
 
-#include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
-#include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
-#include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_op.hpp"
-#include "angle_estimation/music_estimator_op/music_estimator_op.hpp"
-#include "angle_estimation/mvdr_estimator_op/mvdr_estimator_op.hpp"
-#include "angle_estimation/root_music_estimator_op/root_music_estimator_op.hpp"
+#include <holoscan/radar/angle_estimation/beamscan_estimator_op.hpp>
+#include <holoscan/radar/angle_estimation/esprit_estimator_op.hpp>
+#include <holoscan/radar/angle_estimation/rank_one_residual_screen_op.hpp>
+#include <holoscan/radar/angle_estimation/music_estimator_op.hpp>
+#include <holoscan/radar/angle_estimation/mvdr_estimator_op.hpp>
+#include <holoscan/radar/angle_estimation/root_music_estimator_op.hpp>
 #include "config.hpp"  // NOLINT(build/include_subdir)
-#include "detection/cfar_detector_op/cfar_detector_op.hpp"
-#include "detection/feature_assembly_op/feature_assembly_op.hpp"
-#include "detection/multi_source_expansion_op/multi_source_expansion_op.hpp"
-#include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
-#include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
-#include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
-#include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
-#include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
+#include <holoscan/radar/detection/cfar_detector_op.hpp>
+#include <holoscan/radar/detection/feature_assembly_op.hpp>
+#include <holoscan/radar/detection/multi_source_expansion_op.hpp>
+#include <holoscan/radar/fmcw/clutter_filter_op.hpp>
+#include <holoscan/radar/fmcw/fmcw_doppler_processor_op.hpp>
+#include <holoscan/radar/fmcw/fmcw_range_processor_op.hpp>
+#include <holoscan/radar/fmcw/mimo_deinterleave_op.hpp>
+#include <holoscan/radar/fmcw/tdm_sparse_compensation_op.hpp>
 #include "radar_app/app/graph_driver.hpp"
 #include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/report/report_ops.hpp"

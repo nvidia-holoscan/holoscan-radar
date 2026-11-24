@@ -13,11 +13,11 @@
 #include <utility>
 #include <vector>
 
-#include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
-#include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_op.hpp"
-#include "angle_estimation/music_estimator_op/music_estimator_op.hpp"
-#include "angle_estimation/mvdr_estimator_op/mvdr_estimator_op.hpp"
-#include "angle_estimation/root_music_estimator_op/root_music_estimator_op.hpp"
+#include <holoscan/radar/angle_estimation/esprit_estimator_op.hpp>
+#include <holoscan/radar/angle_estimation/rank_one_residual_screen_op.hpp>
+#include <holoscan/radar/angle_estimation/music_estimator_op.hpp>
+#include <holoscan/radar/angle_estimation/mvdr_estimator_op.hpp>
+#include <holoscan/radar/angle_estimation/root_music_estimator_op.hpp>
 #include "radar_app/fmcw/mimo_config.hpp"
 
 namespace holoscan::radar::app::adaptive_aoa {

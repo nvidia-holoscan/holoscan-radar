@@ -33,6 +33,7 @@ include(GNUInstallDirs)
 target_include_directories(radar_common
     PUBLIC
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
+        $<BUILD_INTERFACE:${HOLOSCAN_RADAR_PUBLIC_HEADER_ROOT}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar>
 )
 

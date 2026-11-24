@@ -1,5 +1,10 @@
 # `CPHDReaderOp`
 
+The development package installs `holoscan/radar/io/cphd_file.hpp` as the
+supported host-side CPHD metadata and fixture-reading API. Link
+`holoscan::cphd_reader_op` when using it. The operator parameter codec is
+installed as `holoscan/radar/io/cphd_reader_op/params_config.hpp`.
+
 ## Purpose
 
 Read one selected CPHD channel and emit device phase history with its pulse geometry and an explicit boundary on each batch.
