@@ -215,35 +215,36 @@ Moving their output bindings alone to a different device can therefore fail.
 ### Application build scope
 
 Application `build` and `run` modes default to `BUILD_ALL=OFF`,
-`HOLOSCAN_RADAR_BUILD_TESTING=OFF`, and `PKG_holoscan_radar=OFF`. Their
-`HOLOSCAN_RADAR_APPLICATION=<name>` selection makes the default build depend
-only on the C++ executable, or on `holoscan_radar_python` for Python. The shared
-Python provider still needs every public operator. A configure diagnostic prints
-the selected default build target.
+`HOLOSCAN_RADAR_BUILD_TESTING=OFF`, and `PKG_holoscan_radar=OFF`. The CLI
+sets `APP_<name>=ON`; standard HoloHub helpers enable the application's
+required operators. Every enabled component participates in the default build.
+For example, these CMake options select both SISO and SIMO:
 
-Existing `build/<app>` caches need no reset: cached `APP_*` and `OP_*` switches
-remain available, but unrelated targets are excluded from the application default
-build. This also excludes unused common CUDA helpers. Explicit `build --target`
-requests can still build any enabled target. C++/Python switches select the right
-default target when reusing the same application directory.
+```bash
+-DBUILD_ALL=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=OFF -DPKG_holoscan_radar=OFF \
+  -DAPP_siso=ON -DAPP_simo=ON
+```
 
-CLI `--configure-args` follow the mode defaults. An explicit `BUILD_ALL=ON`,
-`HOLOSCAN_RADAR_BUILD_TESTING=ON`, or
-`PKG_holoscan_radar=ON` retains the broad default build. Module-wide tests enable
-their required operator libraries even with `BUILD_ALL=OFF`. To disable only the
-application default selection, pass `--configure-args=-DHOLOSCAN_RADAR_APPLICATION=`.
+`BUILD_ALL` controls defaults for component options; it does not reset cached
+`APP_*`, `OP_*`, or `PKG_*` selections. Reusing a broad build tree for one
+application can therefore build previously enabled components too. Disable
+unwanted selections explicitly or start a fresh build tree. Required dependencies
+are enabled again by their consumers. Common support libraries may build even
+when unused; application builds do not rewrite target exclusion properties.
+Explicit CLI `--target` requests build the requested target and its dependencies.
 
-Full module builds (`./holoscan-radar build holoscan-radar --language cpp`),
-package/wheel builds, nested module consumers, and `./holoscan-radar test` keep
-their existing scope. Use a full module tree for installation and packaging;
-application trees intentionally omit unneeded installable libraries from their
-default build.
+Python builds enable `holoscan_radar_python`, whose shared provider requires all
+33 public operators. Language-specific application configuration determines
+whether C++ executables are also configured.
 
-An aggregate module build lives in `build/holoscan-radar`; ordinary runs continue
-to use `build/<app>`. They do not automatically reuse aggregate binaries. To use
-an aggregate binary, invoke it from that tree inside the container, supplying the
-configuration path explicitly. Python likewise needs that tree's `python/lib` on
-`PYTHONPATH`. No build-directory aliases or automatic cache migrations are used.
+The former `HOLOSCAN_RADAR_APPLICATION` cache variable and `radar_application`
+target have been removed. Old cache entries for the variable have no effect and
+can be removed with `--configure-args=-UHOLOSCAN_RADAR_APPLICATION`; this flag
+is no longer needed to build Python applications.
+
+Full module, package/wheel, nested consumer, and test builds retain their
+standard selection and dependency behavior. Use a full module tree for
+installation and packaging.
 
 ## Inside a development container
 

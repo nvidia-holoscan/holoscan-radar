@@ -53,7 +53,6 @@
             "-DBUILD_ALL=OFF",
             "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
             "-DPKG_holoscan_radar=OFF",
-            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa",
             "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
             "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
           ]
@@ -74,7 +73,6 @@
             "-DBUILD_ALL=OFF",
             "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
             "-DPKG_holoscan_radar=OFF",
-            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa",
             "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
             "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
           ]
@@ -95,7 +93,6 @@
             "-DBUILD_ALL=OFF",
             "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
             "-DPKG_holoscan_radar=OFF",
-            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa",
             "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
             "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
           ]
@@ -116,7 +113,6 @@
             "-DBUILD_ALL=OFF",
             "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
             "-DPKG_holoscan_radar=OFF",
-            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa",
             "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
             "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
           ]
@@ -137,7 +133,6 @@
             "-DBUILD_ALL=OFF",
             "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
             "-DPKG_holoscan_radar=OFF",
-            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa",
             "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
             "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
           ]

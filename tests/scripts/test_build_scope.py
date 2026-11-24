@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-HELPER = ROOT / "cmake/HoloscanRadarApplicationBuild.cmake"
+HELPER = ROOT / "cmake/HoloHubConfigHelpers.cmake"
 
 
 class ApplicationBuildScopeTest(unittest.TestCase):
@@ -26,9 +26,15 @@ class ApplicationBuildScopeTest(unittest.TestCase):
                         "-DBUILD_ALL=OFF",
                         "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
                         "-DPKG_holoscan_radar=OFF",
-                        f"-DHOLOSCAN_RADAR_APPLICATION={app['name']}",
                     ):
                         self.assertIn(option, options)
+                    self.assertFalse(any("HOLOSCAN_RADAR_APPLICATION" in x for x in options))
+
+    def test_root_does_not_apply_a_second_component_selection_policy(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text()
+        self.assertNotIn("HoloscanRadarApplicationBuild", root_cmake)
+        self.assertNotIn("holoscan_radar_select_application_build", root_cmake)
+        self.assertNotIn("HOLOSCAN_RADAR_APPLICATION", root_cmake)
 
     def configure(self, directory, *options):
         result = subprocess.run(
@@ -53,84 +59,69 @@ class ApplicationBuildScopeTest(unittest.TestCase):
         )
 
     def fixture(self, directory):
-        (directory / "apps").mkdir()
-        (directory / "apps/CMakeLists.txt").write_text(
-            "add_custom_target(required_op COMMAND ${CMAKE_COMMAND} -E echo REQUIRED)\n"
-            "add_custom_target(spotlight ALL COMMAND ${CMAKE_COMMAND} -E echo SPOTLIGHT)\n"
-            "add_dependencies(spotlight required_op)\n"
-            "add_custom_target(test_mvdr ALL COMMAND ${CMAKE_COMMAND} -E echo UNRELATED_TEST)\n"
-            "add_custom_target(other_app ALL COMMAND ${CMAKE_COMMAND} -E echo UNRELATED_APP)\n"
-            "add_custom_target(provider_op COMMAND ${CMAKE_COMMAND} -E echo PROVIDER_OPERATOR)\n"
-            "add_custom_target(holoscan_radar_python ALL COMMAND ${CMAKE_COMMAND} -E echo PYTHON)\n"
-            "add_dependencies(holoscan_radar_python required_op provider_op)\n"
-        )
-        (directory / "CMakeLists.txt").write_text(
-            "cmake_minimum_required(VERSION 3.24)\nproject(scope NONE)\n"
-            'option(APP_other_app "Cached explicit selection" ON)\n'
-            'option(OP_unused "Cached explicit operator" ON)\n'
-            "add_subdirectory(apps)\n"
-            f'include("{HELPER}")\nholoscan_radar_select_application_build()\n'
-        )
-
-    def test_fresh_application_build_selects_only_language_dependencies(self):
-        for python_enabled in (False, True):
-            with self.subTest(python=python_enabled), tempfile.TemporaryDirectory() as temporary:
-                directory = Path(temporary)
-                self.fixture(directory)
-                self.configure(
-                    directory,
-                    "-DHOLOSCAN_RADAR_APPLICATION=spotlight",
-                    "-DBUILD_ALL=OFF",
-                    f"-DHOLOSCAN_RADAR_BUILD_PYTHON={'ON' if python_enabled else 'OFF'}",
+        for name in ("siso", "simo", "required_op", "extra_op"):
+            (directory / name).mkdir()
+            if name in ("siso", "simo"):
+                body = (
+                    "if(NOT HOLOHUB_BUILD_PYTHON)\n"
+                    f"  add_custom_target({name} ALL COMMAND ${{CMAKE_COMMAND}} -E echo {name})\n"
+                    f"  add_dependencies({name} required_op)\nendif()\n"
                 )
-                commands = self.commands(directory)
-                self.assertIn("REQUIRED", commands)
-                self.assertNotIn("UNRELATED", commands)
-                self.assertEqual("PYTHON" in commands, python_enabled)
-                self.assertEqual("SPOTLIGHT" in commands, not python_enabled)
-                self.assertEqual("PROVIDER_OPERATOR" in commands, python_enabled)
+            else:
+                body = f"add_custom_target({name} ALL COMMAND ${{CMAKE_COMMAND}} -E echo {name})\n"
+            (directory / name / "CMakeLists.txt").write_text(body)
+        (directory / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 3.24)\nproject(selection NONE)\n"
+            f'include("{HELPER}")\n'
+            "add_holohub_application(siso DEPENDS OPERATORS required_op)\n"
+            "add_holohub_application(simo DEPENDS OPERATORS required_op)\n"
+            "add_holohub_operator(required_op)\nadd_holohub_operator(extra_op)\n"
+            "if(HOLOHUB_BUILD_PYTHON)\n"
+            "  add_custom_target(holoscan_radar_python ALL COMMAND ${CMAKE_COMMAND} -E echo PROVIDER)\n"
+            "  add_dependencies(holoscan_radar_python required_op)\nendif()\n"
+        )
 
-    def test_reused_broad_cache_switches_languages_without_building_unrelated_targets(self):
+    def test_multiple_applications_and_independent_operator_build_by_default(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             self.fixture(directory)
-            self.configure(directory)
-            self.assertIn("UNRELATED_TEST", self.commands(directory))
-            self.configure(directory, "-DHOLOSCAN_RADAR_APPLICATION=spotlight", "-DBUILD_ALL=OFF")
-            cpp = self.commands(directory)
-            self.assertIn("SPOTLIGHT", cpp)
-            self.assertIn("REQUIRED", cpp)
-            self.assertNotIn("UNRELATED", cpp)
-            self.assertNotIn("PYTHON", cpp)
-            cache = (directory / "build/CMakeCache.txt").read_text()
-            self.assertIn("APP_other_app:BOOL=ON", cache)
-            self.assertIn("OP_unused:BOOL=ON", cache)
-            self.assertIn("UNRELATED_APP", self.commands(directory, "other_app"))
-            self.configure(directory, "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON")
-            python = self.commands(directory)
-            self.assertIn("PYTHON", python)
-            self.assertIn("PROVIDER_OPERATOR", python)
-            self.assertNotIn("SPOTLIGHT", python)
-            self.assertNotIn("UNRELATED", python)
-            self.configure(directory, "-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF")
-            self.assertEqual(self.commands(directory), cpp)
+            self.configure(
+                directory, "-DBUILD_ALL=OFF", "-DAPP_siso=ON", "-DAPP_simo=ON", "-DOP_extra_op=ON"
+            )
+            commands = self.commands(directory)
+            for target in ("siso", "simo", "required_op", "extra_op"):
+                self.assertIn(f"echo {target}", commands)
 
-    def test_explicit_broad_workflows_keep_their_default_targets(self):
-        for variable in (
-            "BUILD_ALL",
-            "HOLOSCAN_RADAR_BUILD_TESTING",
-            "PKG_holoscan_radar",
-            "MODULE_holoscan_radar",
-            "SKBUILD",
-        ):
-            with self.subTest(variable=variable), tempfile.TemporaryDirectory() as temporary:
-                directory = Path(temporary)
-                self.fixture(directory)
-                self.configure(
-                    directory, "-DHOLOSCAN_RADAR_APPLICATION=spotlight", f"-D{variable}=ON"
-                )
-                self.assertIn("UNRELATED_TEST", self.commands(directory))
-                self.assertIn("UNRELATED_APP", self.commands(directory))
+    def test_cached_selections_remain_enabled_until_explicitly_disabled(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.fixture(directory)
+            self.configure(directory, "-DBUILD_ALL=ON")
+            self.configure(directory, "-DBUILD_ALL=OFF", "-DAPP_siso=ON")
+            self.assertIn("echo simo", self.commands(directory))
+            self.assertIn("echo extra_op", self.commands(directory))
+            self.configure(directory, "-DAPP_simo=OFF", "-DOP_extra_op=OFF", "-DOP_required_op=OFF")
+            commands = self.commands(directory)
+            self.assertNotIn("echo simo", commands)
+            self.assertNotIn("echo extra_op", commands)
+            self.assertIn("echo required_op", commands)
+
+    def test_python_without_cpp_target_and_language_switches(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.fixture(directory)
+            self.configure(
+                directory, "-DBUILD_ALL=OFF", "-DAPP_siso=ON", "-DHOLOSCAN_RADAR_APPLICATION=siso"
+            )
+            cpp = self.commands(directory)
+            self.assertIn("echo siso", cpp)
+            self.configure(directory, "-DHOLOHUB_BUILD_PYTHON=ON")
+            commands = self.commands(directory)
+            self.assertNotIn("echo siso", commands)
+            self.assertIn("echo PROVIDER", commands)
+            self.assertIn("echo required_op", commands)
+            self.configure(directory, "-DHOLOHUB_BUILD_PYTHON=OFF")
+            self.assertEqual(cpp, self.commands(directory))
 
 
 if __name__ == "__main__":

@@ -203,8 +203,3 @@ if(NOT SKBUILD)
     install(FILES "${PROJECT_SOURCE_DIR}/NOTICE"
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/holoscan-radar")
 endif()
-
-# Application manifests opt into a dependency-only default build. Keep this last
-# so every configured target (including stale cached selections) is considered.
-include(HoloscanRadarApplicationBuild)
-holoscan_radar_select_application_build()

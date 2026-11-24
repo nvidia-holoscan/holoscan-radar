@@ -46,8 +46,7 @@
                     "cmake_options": [
                         "-DBUILD_ALL=OFF",
                         "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
-                        "-DPKG_holoscan_radar=OFF",
-                        "-DHOLOSCAN_RADAR_APPLICATION=continuous_strip"
+                        "-DPKG_holoscan_radar=OFF"
                     ]
                 }
             }
