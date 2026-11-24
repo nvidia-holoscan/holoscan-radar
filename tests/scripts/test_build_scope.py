@@ -30,6 +30,12 @@ class ApplicationBuildScopeTest(unittest.TestCase):
                         self.assertIn(option, options)
                     self.assertFalse(any("HOLOSCAN_RADAR_APPLICATION" in x for x in options))
 
+    def test_root_does_not_apply_a_second_component_selection_policy(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text()
+        self.assertNotIn("HoloscanRadarApplicationBuild", root_cmake)
+        self.assertNotIn("holoscan_radar_select_application_build", root_cmake)
+        self.assertNotIn("HOLOSCAN_RADAR_APPLICATION", root_cmake)
+
     def configure(self, directory, *options):
         result = subprocess.run(
             [
